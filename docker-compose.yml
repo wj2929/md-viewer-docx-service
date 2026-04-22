@@ -1,0 +1,15 @@
+services:
+  md-viewer-docx:
+    build:
+      context: .
+      dockerfile: Dockerfile.slim
+    ports:
+      - "127.0.0.1:3179:3000"
+    environment:
+      - RATE_LIMIT_PER_MIN=30
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
