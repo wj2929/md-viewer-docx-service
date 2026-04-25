@@ -19,7 +19,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from app.generator import generate_docx_from_content, VALID_STYLES, DOCX_PRESETS
+from app.generator import generate_docx_from_content
+from app.presets import VALID_STYLES, DOCX_PRESETS
 from app.image_injector import preprocess_markdown, inject_images
 
 logging.basicConfig(level=logging.INFO)
