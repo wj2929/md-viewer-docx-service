@@ -30,6 +30,11 @@ class TestHealthz:
         data = client.get("/healthz").json()
         assert "standard" in data["styles"]
 
+    def test_dot_renderer_requires_dot_binary(self, client):
+        with patch("app.main.shutil.which", return_value=None):
+            data = client.get("/healthz").json()
+            assert "dot" not in data["chartRenderersAvailable"]
+
 
 class TestConvertPlainText:
     def test_minimal_markdown(self, client):

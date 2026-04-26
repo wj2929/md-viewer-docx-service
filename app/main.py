@@ -11,6 +11,7 @@ import asyncio
 import logging
 import tempfile
 import json
+import shutil
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException
@@ -101,9 +102,12 @@ async def healthz():
     mode = _detect_mode()
     chart_renderers = []
     if mode == "full":
-        chart_renderers = ["mermaid", "echarts", "dot", "markmap", "plantuml"]
+        chart_renderers = ["mermaid", "echarts", "markmap", "plantuml"]
+        if shutil.which("dot"):
+            chart_renderers.append("dot")
     else:
-        chart_renderers = ["dot"]
+        if shutil.which("dot"):
+            chart_renderers = ["dot"]
 
     return {
         "status": "ok",
