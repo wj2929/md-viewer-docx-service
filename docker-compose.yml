@@ -13,3 +13,19 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  md-viewer-docx-full:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: Dockerfile.full
+    ports:
+      - "127.0.0.1:3180:3000"
+    environment:
+      - RATE_LIMIT_PER_MIN=30
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
