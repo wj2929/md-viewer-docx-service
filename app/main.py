@@ -22,6 +22,8 @@ from slowapi.errors import RateLimitExceeded
 from app.generator import generate_docx_from_content
 from app.presets import VALID_STYLES, DOCX_PRESETS
 from app.image_injector import preprocess_markdown, inject_images
+from app.chart_renderers import render_charts_and_formulas_sync, rendered_images_to_base64
+from app.font_embedder import embed_fonts_if_requested, resolve_reference_docx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -90,6 +92,7 @@ class ConvertRequest(BaseModel):
     chartRenderers: list[str] = Field(default_factory=list)
     embedFont: bool = Field(default=False)
     clientVersion: Optional[str] = Field(default=None, max_length=20)
+    referenceDocxBase64: Optional[str] = Field(default=None, max_length=20_000_000)
 
 
 @app.get("/healthz")
@@ -130,10 +133,18 @@ async def convert(req: ConvertRequest, request: Request):
 
     md = req.markdown
     image_map = {}
+    reference_docx_path, reference_warnings = resolve_reference_docx(req.referenceDocxBase64)
+    warnings.extend(reference_warnings)
 
     if req.images:
-        md, image_map = preprocess_markdown(md, [img.model_dump() for img in req.images])
-        skipped = len(req.images) - len(image_map)
+        chart_result = render_charts_and_formulas_sync(md, [])
+        md = chart_result.markdown
+        rendered_images = rendered_images_to_base64(chart_result.images)
+        warnings.extend(chart_result.warnings)
+        md, image_map = preprocess_markdown(md, [img.model_dump() for img in req.images] + rendered_images)
+        req_image_ids = {img.id for img in req.images}
+        accepted_req_images = sum(1 for image_id in req_image_ids if image_id in image_map)
+        skipped = len(req.images) - accepted_req_images
         if skipped > 0:
             warnings.append(f"{skipped} images failed validation")
             charts_failed = skipped
@@ -147,8 +158,20 @@ async def convert(req: ConvertRequest, request: Request):
                 "code": "RENDER_UNAVAILABLE",
             })
         mode_used = "serverRendered"
-        # TODO: 阶段 2 实现服务端图表渲染（playwright + mermaid-cli 等）
-        warnings.append("Server-side chart rendering not yet implemented")
+        chart_result = render_charts_and_formulas_sync(md, req.chartRenderers or None)
+        md = chart_result.markdown
+        warnings.extend(chart_result.warnings)
+        rendered_images = rendered_images_to_base64(chart_result.images)
+        _, image_map = preprocess_markdown(md, rendered_images)
+        charts_rendered = len(image_map)
+
+    else:
+        chart_result = render_charts_and_formulas_sync(md, [])
+        md = chart_result.markdown
+        warnings.extend(chart_result.warnings)
+        rendered_images = rendered_images_to_base64(chart_result.images)
+        _, image_map = preprocess_markdown(md, rendered_images)
+        charts_rendered = len(image_map)
 
     tmp_dir = tempfile.mkdtemp(prefix="mdv-docx-")
     tmp_path = os.path.join(tmp_dir, f"output-{uuid.uuid4().hex[:8]}.docx")
@@ -162,11 +185,15 @@ async def convert(req: ConvertRequest, request: Request):
             title=req.title,
             footer_text=req.footerText or "由 MD Viewer 生成",
             references=None,
+            reference_docx_path=reference_docx_path,
         )
 
         if image_map:
             injected = await asyncio.to_thread(inject_images, tmp_path, image_map)
             logger.info(f"[Convert] Injected {injected} images into DOCX")
+
+        font_warnings = await asyncio.to_thread(embed_fonts_if_requested, tmp_path, req.embedFont)
+        warnings.extend(font_warnings)
 
         headers = {
             "X-Service-Version": VERSION,

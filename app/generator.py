@@ -727,6 +727,7 @@ def generate_docx_from_content(
     title: str = None,
     footer_text: str = "由终身教育智能体生成",
     references: Optional[List[dict]] = None,
+    reference_docx_path: Optional[str] = None,
 ):
     """
     从 Markdown 内容生成格式化 Word 文档（统一入口）
@@ -749,7 +750,15 @@ def generate_docx_from_content(
 
     # standard 模式：基础渲染
     if style == "standard":
-        _generate_standard_from_content(content, output_path, title, footer_text, references=references, ref_id_to_index=ref_id_to_index)
+        _generate_standard_from_content(
+            content,
+            output_path,
+            title,
+            footer_text,
+            references=references,
+            ref_id_to_index=ref_id_to_index,
+            reference_docx_path=reference_docx_path,
+        )
         return
 
     preset = DOCX_PRESETS[style]
@@ -764,7 +773,7 @@ def generate_docx_from_content(
         if not title:
             title = preset.get("display_name", "文档")
 
-    doc = Document()
+    doc = Document(reference_docx_path) if reference_docx_path else Document()
 
     # 页面设置
     section = doc.sections[0]
@@ -859,6 +868,7 @@ def _generate_standard_from_content(
     footer_text: str = "由终身教育智能体生成",
     references: Optional[List[dict]] = None,
     ref_id_to_index: Optional[Dict[str, int]] = None,
+    reference_docx_path: Optional[str] = None,
 ):
     """标准格式渲染（基础 markdown→word，与原 FileService._write_docx 等效）"""
     if not title:
@@ -868,7 +878,7 @@ def _generate_standard_from_content(
                 title = stripped.lstrip('#').strip()
                 break
 
-    doc = Document()
+    doc = Document(reference_docx_path) if reference_docx_path else Document()
 
     # 标准页面设置
     section = doc.sections[0]
