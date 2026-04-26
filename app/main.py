@@ -10,6 +10,7 @@ import uuid
 import asyncio
 import logging
 import tempfile
+import json
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException
@@ -198,7 +199,7 @@ async def convert(req: ConvertRequest, request: Request):
         headers = {
             "X-Service-Version": VERSION,
             "X-Service-Mode": mode_used,
-            "X-Convert-Warnings": str(warnings),
+            "X-Convert-Warnings": json.dumps(warnings, ensure_ascii=True),
             "X-Charts-Rendered": str(charts_rendered),
             "X-Charts-Failed": str(charts_failed),
             "X-Min-Client-Version": MIN_CLIENT_VERSION,

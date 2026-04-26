@@ -58,6 +58,14 @@ class TestConvertPlainText:
         assert "x-service-version" in resp.headers
         assert "x-service-mode" in resp.headers
 
+    def test_embed_font_warning_header_is_ascii_safe(self, client):
+        resp = client.post("/convert", json={
+            "markdown": "# 字体测试\n\n正文",
+            "embedFont": True,
+        })
+        assert resp.status_code == 200
+        assert "x-convert-warnings" in resp.headers
+
 
 class TestConvertWithImages:
     def test_with_valid_image(self, client, small_png_base64):
