@@ -128,3 +128,32 @@ class TestInjectImages:
         doc_path = str(tmp_path / "empty.docx")
         generate_docx_from_content(content="# Test", output_path=doc_path, style="standard")
         assert inject_images(doc_path, {}) == 0
+
+    def test_preview_image_paragraph_uses_chart_margin(self, tmp_path, small_png_base64):
+        placeholder_id = "mdv__chart__a0b1c2d3__"
+        md = f"# Test\n\n![]({placeholder_id})\n\nAfter image."
+
+        from app.generator import generate_docx_from_content
+        doc_path = str(tmp_path / "preview_image_spacing.docx")
+        generate_docx_from_content(content=md, output_path=doc_path, style="preview")
+
+        count = inject_images(
+            doc_path,
+            {placeholder_id: ImageData(placeholder_id, small_png_base64)},
+            style="preview",
+        )
+        assert count == 1
+
+        doc = Document(doc_path)
+        image_para = next(p for p in doc.paragraphs if p._element.xpath(".//w:drawing"))
+        assert round(image_para.paragraph_format.space_before.cm, 2) == 0.45
+        assert round(image_para.paragraph_format.space_after.cm, 2) == 0.45
+
+
+class TestImageWidth:
+    def test_preview_clamps_image_width_to_content_width(self):
+        from app.image_injector import resolve_image_width_cm
+
+        assert resolve_image_width_cm(15.5, style="preview") == 18.5
+        assert resolve_image_width_cm(20.0, style="preview") == 19.0
+        assert resolve_image_width_cm(15.5, style="standard") == 15.5

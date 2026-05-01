@@ -15,7 +15,22 @@ class HeadingStyleDef:
     bold: bool = False
 
 
+STYLE_ORDER = ("preview", "standard", "official", "internal", "report")
+
+
 DOCX_PRESETS = {
+    # ── 预览一致：接近 Markdown 预览 / PDF 导出的紧凑排版 ──
+    "preview": {
+        "display_name": "预览一致",
+        "page_margins": {"top": 1.0, "bottom": 1.0, "left": 1.0, "right": 1.0},
+        "title_font": "auto", "title_size": 18,
+        "body_font": "auto", "body_size": 10,
+        "mono_font": "auto",
+        "line_spacing_multiple": 1.45,
+        "first_line_indent": 0,
+        "align": "left",
+        "content_width_cm": 19.0,
+    },
     # ── 正式公文：GB/T 9704-2012 严格版，四级标题体系 ──
     # heading_styles 按 markdown heading level 映射（# 已被 title_font 单独处理）
     # ## = 公文一级标题（一、）→ 黑体
@@ -73,4 +88,4 @@ DOCX_PRESETS = {
     },
 }
 
-VALID_STYLES = frozenset(DOCX_PRESETS.keys()) | {"standard"}
+VALID_STYLES = frozenset(STYLE_ORDER)

@@ -1,17 +1,16 @@
-"""
-服务端图表与公式预渲染。
-
-full 镜像优先使用真实渲染器；当前稳定路径先覆盖 Graphviz 的原生
-dot 渲染，其余图表和 KaTeX 公式退化为等宽 PNG 代码图，确保 DOCX
-里可见且不会破坏导出流程。退化信息通过 warnings 返回给客户端。
-"""
+"""服务端图表与公式预渲染。"""
 from __future__ import annotations
 
 import base64
 import io
+import html
+import os
+from pathlib import Path
 import re
+import shutil
 import subprocess
 import textwrap
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -102,10 +101,14 @@ def _new_placeholder() -> str:
 def _render_chart_png(lang: str, code: str) -> bytes:
     if lang in {"dot", "graphviz"}:
         return _render_dot_png(code)
+    if lang in {"mermaid", "echarts", "markmap"}:
+        return _render_browser_chart_png(lang, code)
     return _render_text_png(code, title=f"{lang} 图表")
 
 
 def _render_dot_png(code: str) -> bytes:
+    if not shutil.which("dot"):
+        raise RuntimeError("dot binary is not installed")
     proc = subprocess.run(
         ["dot", "-Tpng"],
         input=code.encode("utf-8"),
@@ -116,6 +119,171 @@ def _render_dot_png(code: str) -> bytes:
     if proc.returncode != 0 or not proc.stdout:
         raise RuntimeError(proc.stderr.decode("utf-8", errors="replace")[:300] or "dot failed")
     return proc.stdout
+
+
+def _render_browser_chart_png(lang: str, code: str) -> bytes:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise RuntimeError("playwright is not installed") from exc
+
+    html_path = _write_chart_html(lang, code)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            page = browser.new_page(viewport={"width": 1280, "height": 900}, device_scale_factor=2)
+            page.goto(html_path.as_uri(), wait_until="networkidle", timeout=20_000)
+            page.wait_for_function("window.__mdvDone === true || window.__mdvError", timeout=20_000)
+            error = page.evaluate("window.__mdvError || ''")
+            if error:
+                raise RuntimeError(str(error)[:300])
+            locator = page.locator("#capture")
+            png = locator.screenshot(type="png", timeout=10_000)
+            browser.close()
+            return png
+    finally:
+        try:
+            html_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _write_chart_html(lang: str, code: str) -> Path:
+    assets = _resolve_browser_assets()
+    if lang == "echarts":
+        body = _echarts_html(code, assets)
+    elif lang == "mermaid":
+        body = _mermaid_html(code, assets)
+    elif lang == "markmap":
+        body = _markmap_html(code, assets)
+    else:
+        raise RuntimeError(f"unsupported browser renderer: {lang}")
+
+    fd, tmp_name = tempfile.mkstemp(prefix=f"mdv-{lang}-", suffix=".html")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(body)
+    return Path(tmp_name)
+
+
+def _resolve_browser_assets() -> dict[str, str]:
+    roots = [
+        Path(__file__).resolve().parents[2] / "node_modules",
+        Path(__file__).resolve().parents[3] / "md-viewer" / "node_modules",
+    ]
+    found_root = next((root for root in roots if root.exists()), None)
+    if not found_root:
+        raise RuntimeError("node_modules with chart renderers is not installed")
+
+    paths = {
+        "echarts": found_root / "echarts" / "dist" / "echarts.min.js",
+        "mermaid": found_root / "mermaid" / "dist" / "mermaid.min.js",
+        "d3": found_root / "d3" / "dist" / "d3.min.js",
+        "markmap_lib": found_root / "markmap-lib" / "dist" / "browser" / "index.iife.js",
+        "markmap_view": found_root / "markmap-view" / "dist" / "browser" / "index.js",
+    }
+    missing = [name for name, path in paths.items() if not path.exists()]
+    if missing:
+        raise RuntimeError(f"missing chart renderer assets: {', '.join(missing)}")
+    return {name: path.as_uri() for name, path in paths.items()}
+
+
+def _base_html(source: str, scripts: str, render_script: str) -> str:
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body {{ margin: 0; padding: 0; background: white; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "PingFang SC", Arial, sans-serif; }}
+    #capture {{ width: 1170px; min-height: 420px; background: white; padding: 24px; box-sizing: border-box; }}
+    svg {{ max-width: 100%; }}
+  </style>
+  {scripts}
+</head>
+<body>
+  <div id="capture"></div>
+  <script>
+    const SOURCE = {source!r};
+    {render_script}
+  </script>
+</body>
+</html>"""
+
+
+def _echarts_html(code: str, assets: dict[str, str]) -> str:
+    scripts = f'<script src="{html.escape(assets["echarts"])}"></script>'
+    render_script = """
+    (async () => {
+      try {
+        const option = Function('"use strict"; return (' + SOURCE.replace(/\\/\\/.*$/gm, '').replace(/\\/\\*[\\s\\S]*?\\*\\//g, '').replace(/^(?:const|let|var)\\s+\\w+\\s*=\\s*/, '').replace(/^\\w+\\s*=\\s*/, '').replace(/;\\s*$/, '') + ')')();
+        const el = document.getElementById('capture');
+        el.style.height = '620px';
+        const chart = echarts.init(el, null, { renderer: 'svg', width: 1170, height: 620 });
+        chart.setOption({ ...option, animation: false });
+        await new Promise(resolve => setTimeout(resolve, 300));
+        window.__mdvDone = true;
+      } catch (error) {
+        window.__mdvError = error && error.message ? error.message : String(error);
+      }
+    })();
+    """
+    return _base_html(code, scripts, render_script)
+
+
+def _mermaid_html(code: str, assets: dict[str, str]) -> str:
+    scripts = f'<script src="{html.escape(assets["mermaid"])}"></script>'
+    render_script = """
+    (async () => {
+      try {
+        mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'default', flowchart: { htmlLabels: true, useMaxWidth: true }, sequence: { useMaxWidth: true } });
+        const result = await mermaid.render('mdv-mermaid-' + Date.now(), SOURCE);
+        const el = document.getElementById('capture');
+        el.innerHTML = result.svg;
+        const svg = el.querySelector('svg');
+        if (svg) {
+          svg.removeAttribute('height');
+          svg.setAttribute('width', '1120');
+          svg.style.maxWidth = '1120px';
+          svg.style.display = 'block';
+        }
+        await new Promise(resolve => setTimeout(resolve, 200));
+        window.__mdvDone = true;
+      } catch (error) {
+        window.__mdvError = error && error.message ? error.message : String(error);
+      }
+    })();
+    """
+    return _base_html(code, scripts, render_script)
+
+
+def _markmap_html(code: str, assets: dict[str, str]) -> str:
+    scripts = "\n".join([
+        f'<script src="{html.escape(assets["d3"])}"></script>',
+        f'<script src="{html.escape(assets["markmap_lib"])}"></script>',
+        f'<script src="{html.escape(assets["markmap_view"])}"></script>',
+    ])
+    render_script = """
+    (async () => {
+      try {
+        const el = document.getElementById('capture');
+        el.style.height = '640px';
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', '1120');
+        svg.setAttribute('height', '600');
+        el.appendChild(svg);
+        const transformer = new markmap.Transformer();
+        const { root, features } = transformer.transform(SOURCE);
+        const opts = markmap.deriveOptions(features);
+        const mm = markmap.Markmap.create(svg, opts, root);
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        await mm.fit();
+        await new Promise(resolve => setTimeout(resolve, 500));
+        window.__mdvDone = true;
+      } catch (error) {
+        window.__mdvError = error && error.message ? error.message : String(error);
+      }
+    })();
+    """
+    return _base_html(code, scripts, render_script)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:

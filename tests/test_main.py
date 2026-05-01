@@ -1,5 +1,9 @@
 import os
 import pytest
+import zipfile
+import io
+from pathlib import Path
+from PIL import Image
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
@@ -30,6 +34,10 @@ class TestHealthz:
         data = client.get("/healthz").json()
         assert "standard" in data["styles"]
 
+    def test_healthz_styles_are_ordered_and_include_preview(self, client):
+        data = client.get("/healthz").json()
+        assert data["styles"] == ["preview", "standard", "official", "internal", "report"]
+
     def test_dot_renderer_requires_dot_binary(self, client):
         with patch("app.main.shutil.which", return_value=None):
             data = client.get("/healthz").json()
@@ -43,7 +51,7 @@ class TestConvertPlainText:
         assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         assert len(resp.content) > 0
 
-    @pytest.mark.parametrize("style", ["standard", "official", "internal", "report"])
+    @pytest.mark.parametrize("style", ["preview", "standard", "official", "internal", "report"])
     def test_all_styles(self, client, style):
         resp = client.post("/convert", json={
             "markdown": "# 测试\n\n正文内容。",
@@ -95,6 +103,34 @@ class TestRenderChartsSlimMode:
         # slim 模式没有 playwright，应返回 400 或 200+warning
         # 取决于实际检测逻辑
         assert resp.status_code in (200, 400)
+
+    def test_full_mode_render_charts_uses_real_browser_renderer(self, client):
+        pytest.importorskip("playwright.sync_api")
+        if not _has_browser_assets():
+            pytest.skip("browser chart renderer assets are not installed")
+
+        with patch("app.main._detect_mode", return_value="full"):
+            resp = client.post("/convert", json={
+                "markdown": "```echarts\n{ xAxis: { type: 'category', data: ['A', 'B'] }, yAxis: {}, series: [{ type: 'bar', data: [1, 2] }] }\n```",
+                "renderCharts": True,
+            })
+
+        assert resp.status_code == 200
+        assert resp.headers.get("x-service-mode") == "serverRendered"
+        assert "Playwright Sync API inside the asyncio loop" not in resp.headers.get("x-convert-warnings", "")
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+            image_name = next(n for n in z.namelist() if n.startswith("word/media/"))
+            image = Image.open(io.BytesIO(z.read(image_name)))
+        assert image.width == 2340
+
+
+def _has_browser_assets() -> bool:
+    here = Path(__file__).resolve()
+    roots = [
+        here.parents[1] / "node_modules",
+        here.parents[2] / "md-viewer" / "node_modules",
+    ]
+    return any((root / "echarts" / "dist" / "echarts.min.js").exists() for root in roots)
 
 
 class TestApiKey:

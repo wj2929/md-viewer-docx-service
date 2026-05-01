@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 PLACEHOLDER_PATTERN = re.compile(r"^!\[\]\((mdv__chart__[0-9a-f]{8}__)\)$")
 IMAGE_MAX_PIXELS = 20_000_000
 IMAGE_MAX_B64_LEN = 2_800_000
+PREVIEW_IMAGE_MARGIN_CM = 0.45
+DEFAULT_IMAGE_MARGIN_CM = 0.3
 
 class ImageData:
     __slots__ = ("id", "png_bytes", "width_cm")
@@ -34,6 +36,15 @@ class ImageData:
         w, h = img.size
         if w * h > IMAGE_MAX_PIXELS:
             raise ValueError(f"Image {id}: {w}x{h} = {w*h} pixels exceeds limit {IMAGE_MAX_PIXELS}")
+
+
+def resolve_image_width_cm(width_cm: float, style: str = "standard") -> float:
+    """根据导出样式解析图片插入宽度。"""
+    if style != "preview":
+        return width_cm
+    if width_cm < 18.0:
+        return 18.5
+    return min(width_cm, 19.0)
 
 
 def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, ImageData]]:
@@ -57,7 +68,7 @@ def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, Ima
     return md, image_map
 
 
-def inject_images(doc_path: str, image_map: Dict[str, ImageData]) -> int:
+def inject_images(doc_path: str, image_map: Dict[str, ImageData], style: str = "standard") -> int:
     """在生成好的 DOCX 中，把占位符段落替换为图片。
 
     扫描所有段落，找到 ![](mdv__chart__xxx__) 格式的文本，替换为图片。
@@ -86,7 +97,7 @@ def inject_images(doc_path: str, image_map: Dict[str, ImageData]) -> int:
             run.clear()
 
         run = para.add_run()
-        run.add_picture(io.BytesIO(img_data.png_bytes), width=Cm(img_data.width_cm))
+        run.add_picture(io.BytesIO(img_data.png_bytes), width=Cm(resolve_image_width_cm(img_data.width_cm, style)))
         injected += 1
 
         # 清除图片段落的固定行距和首行缩进（公文等样式的固定行距会压扁图片）
@@ -94,8 +105,9 @@ def inject_images(doc_path: str, image_map: Dict[str, ImageData]) -> int:
         pf.line_spacing = None
         pf.line_spacing_rule = None
         pf.first_line_indent = None
-        pf.space_before = Cm(0.3)
-        pf.space_after = Cm(0.3)
+        margin_cm = PREVIEW_IMAGE_MARGIN_CM if style == "preview" else DEFAULT_IMAGE_MARGIN_CM
+        pf.space_before = Cm(margin_cm)
+        pf.space_after = Cm(margin_cm)
 
         logger.info(f"[ImageInjector] Injected {placeholder_id} ({len(img_data.png_bytes)} bytes)")
 

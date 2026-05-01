@@ -22,7 +22,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from app.generator import generate_docx_from_content
-from app.presets import VALID_STYLES, DOCX_PRESETS
+from app.presets import VALID_STYLES, DOCX_PRESETS, STYLE_ORDER
 from app.image_injector import preprocess_markdown, inject_images
 from app.chart_renderers import render_charts_and_formulas_sync, rendered_images_to_base64
 from app.font_embedder import embed_fonts_if_requested, resolve_reference_docx
@@ -86,7 +86,7 @@ class ImageItem(BaseModel):
 
 class ConvertRequest(BaseModel):
     markdown: str = Field(..., min_length=1, max_length=500_000)
-    style: str = Field(default="standard", pattern=r"^(standard|official|internal|report)$")
+    style: str = Field(default="standard", max_length=20)
     title: Optional[str] = Field(default=None, max_length=200)
     footerText: Optional[str] = Field(default="由 MD Viewer 生成", max_length=200)
     images: list[ImageItem] = Field(default_factory=list, max_length=50)
@@ -113,7 +113,7 @@ async def healthz():
         "status": "ok",
         "version": VERSION,
         "mode": mode,
-        "styles": list(DOCX_PRESETS.keys()) + ["standard"],
+        "styles": list(STYLE_ORDER),
         "fontsAvailable": _get_available_fonts(),
         "embedFontSupported": False,
         "chartRenderersAvailable": chart_renderers,
@@ -142,7 +142,7 @@ async def convert(req: ConvertRequest, request: Request):
     warnings.extend(reference_warnings)
 
     if req.images:
-        chart_result = render_charts_and_formulas_sync(md, [])
+        chart_result = await asyncio.to_thread(render_charts_and_formulas_sync, md, [])
         md = chart_result.markdown
         rendered_images = rendered_images_to_base64(chart_result.images)
         warnings.extend(chart_result.warnings)
@@ -163,7 +163,7 @@ async def convert(req: ConvertRequest, request: Request):
                 "code": "RENDER_UNAVAILABLE",
             })
         mode_used = "serverRendered"
-        chart_result = render_charts_and_formulas_sync(md, req.chartRenderers or None)
+        chart_result = await asyncio.to_thread(render_charts_and_formulas_sync, md, req.chartRenderers or None)
         md = chart_result.markdown
         warnings.extend(chart_result.warnings)
         rendered_images = rendered_images_to_base64(chart_result.images)
@@ -171,7 +171,7 @@ async def convert(req: ConvertRequest, request: Request):
         charts_rendered = len(image_map)
 
     else:
-        chart_result = render_charts_and_formulas_sync(md, [])
+        chart_result = await asyncio.to_thread(render_charts_and_formulas_sync, md, [])
         md = chart_result.markdown
         warnings.extend(chart_result.warnings)
         rendered_images = rendered_images_to_base64(chart_result.images)
@@ -194,7 +194,7 @@ async def convert(req: ConvertRequest, request: Request):
         )
 
         if image_map:
-            injected = await asyncio.to_thread(inject_images, tmp_path, image_map)
+            injected = await asyncio.to_thread(inject_images, tmp_path, image_map, req.style)
             logger.info(f"[Convert] Injected {injected} images into DOCX")
 
         font_warnings = await asyncio.to_thread(embed_fonts_if_requested, tmp_path, req.embedFont)

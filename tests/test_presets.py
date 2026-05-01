@@ -1,13 +1,14 @@
 import importlib
-from app.presets import DOCX_PRESETS, VALID_STYLES, HeadingStyleDef
+from app.presets import DOCX_PRESETS, STYLE_ORDER, VALID_STYLES, HeadingStyleDef
 
 
 class TestValidStyles:
-    def test_contains_four_styles(self):
-        assert VALID_STYLES == {"standard", "official", "internal", "report"}
+    def test_contains_preview_and_legacy_styles(self):
+        assert VALID_STYLES == {"preview", "standard", "official", "internal", "report"}
+        assert STYLE_ORDER == ("preview", "standard", "official", "internal", "report")
 
     def test_presets_keys_match(self):
-        assert set(DOCX_PRESETS.keys()) == {"official", "internal", "report"}
+        assert set(DOCX_PRESETS.keys()) == {"preview", "official", "internal", "report"}
 
 
 class TestDocxPresets:
@@ -18,11 +19,16 @@ class TestDocxPresets:
 
     def test_each_preset_has_required_keys(self):
         for name, preset in DOCX_PRESETS.items():
-            missing = self.REQUIRED_KEYS - set(preset.keys())
+            required_keys = self.REQUIRED_KEYS
+            if name == "preview":
+                required_keys = self.REQUIRED_KEYS - {"heading_styles"}
+            missing = required_keys - set(preset.keys())
             assert not missing, f"Preset '{name}' missing keys: {missing}"
 
     def test_heading_styles_are_heading_style_def(self):
         for name, preset in DOCX_PRESETS.items():
+            if name == "preview":
+                continue
             for level, style in preset["heading_styles"].items():
                 assert isinstance(style, HeadingStyleDef), (
                     f"Preset '{name}' level {level}: expected HeadingStyleDef, got {type(style)}"
