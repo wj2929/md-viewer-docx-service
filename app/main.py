@@ -22,8 +22,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from app.generator import generate_docx_from_content
-from app.presets import VALID_STYLES, DOCX_PRESETS, STYLE_ORDER
-from app.image_injector import preprocess_markdown, inject_images
+from app.presets import VALID_STYLES, DOCX_PRESETS, STYLE_ORDER, NON_PREVIEW_BLOCK_STYLES
+from app.image_injector import preprocess_markdown, inject_images, ImageLayout
 from app.chart_renderers import render_charts_and_formulas_sync, rendered_images_to_base64
 from app.font_embedder import embed_fonts_if_requested, resolve_reference_docx
 
@@ -76,6 +76,19 @@ def _get_available_fonts() -> list[str]:
     except Exception:
         pass
     return fonts
+
+
+def _image_layout_for_style(style: str) -> ImageLayout | None:
+    block_style = NON_PREVIEW_BLOCK_STYLES.get(style)
+    if not block_style:
+        return None
+    image = block_style.image
+    return ImageLayout(
+        max_width_cm=image.max_width_cm,
+        min_width_cm=image.min_width_cm,
+        min_width_source_threshold_cm=image.min_width_source_threshold_cm,
+        margin_cm=image.margin_cm,
+    )
 
 
 class ImageItem(BaseModel):
@@ -194,7 +207,13 @@ async def convert(req: ConvertRequest, request: Request):
         )
 
         if image_map:
-            injected = await asyncio.to_thread(inject_images, tmp_path, image_map, req.style)
+            injected = await asyncio.to_thread(
+                inject_images,
+                tmp_path,
+                image_map,
+                req.style,
+                _image_layout_for_style(req.style),
+            )
             logger.info(f"[Convert] Injected {injected} images into DOCX")
 
         font_warnings = await asyncio.to_thread(embed_fonts_if_requested, tmp_path, req.embedFont)

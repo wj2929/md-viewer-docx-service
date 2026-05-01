@@ -8,6 +8,7 @@ import re
 import base64
 import io
 import logging
+from dataclasses import dataclass
 from typing import Dict, Optional
 from docx import Document
 from docx.shared import Cm
@@ -20,6 +21,15 @@ IMAGE_MAX_PIXELS = 20_000_000
 IMAGE_MAX_B64_LEN = 2_800_000
 PREVIEW_IMAGE_MARGIN_CM = 0.45
 DEFAULT_IMAGE_MARGIN_CM = 0.3
+
+
+@dataclass(frozen=True)
+class ImageLayout:
+    max_width_cm: float
+    min_width_cm: float = 0.0
+    min_width_source_threshold_cm: float = 0.0
+    margin_cm: float = DEFAULT_IMAGE_MARGIN_CM
+
 
 class ImageData:
     __slots__ = ("id", "png_bytes", "width_cm")
@@ -38,8 +48,19 @@ class ImageData:
             raise ValueError(f"Image {id}: {w}x{h} = {w*h} pixels exceeds limit {IMAGE_MAX_PIXELS}")
 
 
-def resolve_image_width_cm(width_cm: float, style: str = "standard") -> float:
+def resolve_image_width_cm(width_cm: float, style: str = "standard", layout: Optional[ImageLayout] = None) -> float:
     """根据导出样式解析图片插入宽度。"""
+    if layout is not None:
+        resolved = min(width_cm, layout.max_width_cm)
+        should_enlarge = (
+            layout.min_width_cm
+            and width_cm >= layout.min_width_source_threshold_cm
+            and resolved < layout.min_width_cm
+        )
+        if should_enlarge:
+            resolved = min(layout.min_width_cm, layout.max_width_cm)
+        return resolved
+
     if style != "preview":
         return width_cm
     if width_cm < 18.0:
@@ -68,7 +89,12 @@ def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, Ima
     return md, image_map
 
 
-def inject_images(doc_path: str, image_map: Dict[str, ImageData], style: str = "standard") -> int:
+def inject_images(
+    doc_path: str,
+    image_map: Dict[str, ImageData],
+    style: str = "standard",
+    layout: Optional[ImageLayout] = None,
+) -> int:
     """在生成好的 DOCX 中，把占位符段落替换为图片。
 
     扫描所有段落，找到 ![](mdv__chart__xxx__) 格式的文本，替换为图片。
@@ -97,7 +123,10 @@ def inject_images(doc_path: str, image_map: Dict[str, ImageData], style: str = "
             run.clear()
 
         run = para.add_run()
-        run.add_picture(io.BytesIO(img_data.png_bytes), width=Cm(resolve_image_width_cm(img_data.width_cm, style)))
+        run.add_picture(
+            io.BytesIO(img_data.png_bytes),
+            width=Cm(resolve_image_width_cm(img_data.width_cm, style, layout)),
+        )
         injected += 1
 
         # 清除图片段落的固定行距和首行缩进（公文等样式的固定行距会压扁图片）
@@ -105,7 +134,9 @@ def inject_images(doc_path: str, image_map: Dict[str, ImageData], style: str = "
         pf.line_spacing = None
         pf.line_spacing_rule = None
         pf.first_line_indent = None
-        margin_cm = PREVIEW_IMAGE_MARGIN_CM if style == "preview" else DEFAULT_IMAGE_MARGIN_CM
+        margin_cm = layout.margin_cm if layout is not None else (
+            PREVIEW_IMAGE_MARGIN_CM if style == "preview" else DEFAULT_IMAGE_MARGIN_CM
+        )
         pf.space_before = Cm(margin_cm)
         pf.space_after = Cm(margin_cm)
 

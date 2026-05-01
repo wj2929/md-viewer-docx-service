@@ -15,6 +15,60 @@ class HeadingStyleDef:
     bold: bool = False
 
 
+@dataclass(frozen=True)
+class TableStyleDef:
+    """非 preview 表格块级样式定义"""
+    content_width_cm: float
+    alignment: str = "center"
+    adaptive_width: bool = False
+    header_fill: str = ""
+    border_color: str = "D0D7DE"
+    border_size: str = "4"
+    header_font_size: float = 9.5
+    body_font_size: float = 9.5
+    cell_margin_top: int = 70
+    cell_margin_start: int = 120
+    cell_margin_bottom: int = 70
+    cell_margin_end: int = 120
+    line_spacing: float = 1.0
+    gap_after_pt: float = 4.0
+
+
+@dataclass(frozen=True)
+class CalloutStyleDef:
+    """非 preview 引用/提示块级样式定义"""
+    mode: str
+    fill: str = ""
+    font_size_delta: float = -0.5
+    note_prefix: str = "注："
+
+
+@dataclass(frozen=True)
+class CodeStyleDef:
+    """非 preview 代码块样式定义"""
+    font_size: float = 9.0
+    fill: str = "F5F5F5"
+    line_spacing: float = 1.0
+
+
+@dataclass(frozen=True)
+class ImageStyleDef:
+    """非 preview 图片布局样式定义"""
+    max_width_cm: float
+    min_width_cm: float = 0.0
+    min_width_source_threshold_cm: float = 0.0
+    margin_cm: float = 0.3
+
+
+@dataclass(frozen=True)
+class BlockStyleDef:
+    """非 preview 块级样式定义"""
+    table: TableStyleDef
+    callout: CalloutStyleDef
+    code: CodeStyleDef
+    image: ImageStyleDef
+
+
 STYLE_ORDER = ("preview", "standard", "official", "internal", "report")
 
 
@@ -56,7 +110,7 @@ DOCX_PRESETS = {
     # ## = 一级标题 → 黑体, ### = 二级标题 → 宋体加粗
     "internal": {
         "display_name": "机关内部文件",
-        "page_margins": {"top": 2.54, "bottom": 2.54, "left": 3.17, "right": 3.17},
+        "page_margins": {"top": 2.3, "bottom": 2.3, "left": 2.54, "right": 2.54},
         "title_font": "黑体", "title_size": 18,
         "heading_styles": {
             1: HeadingStyleDef("黑体", 18),                    # # 文档标题（兜底）
@@ -65,7 +119,7 @@ DOCX_PRESETS = {
             4: HeadingStyleDef("宋体", 15, bold=True),         # #### 三级标题
         },
         "body_font": "宋体", "body_size": 15,
-        "line_spacing_multiple": 1.5,
+        "line_spacing_multiple": 1.35,
         "first_line_indent": 0.74,
         "align": "justify",
     },
@@ -73,7 +127,7 @@ DOCX_PRESETS = {
     # ## = 一级标题 → 黑体, ### = 二级标题 → 宋体加粗
     "report": {
         "display_name": "调研/分析报告",
-        "page_margins": {"top": 2.54, "bottom": 2.54, "left": 3.17, "right": 3.17},
+        "page_margins": {"top": 2.2, "bottom": 2.2, "left": 2.54, "right": 2.54},
         "title_font": "黑体", "title_size": 16,
         "heading_styles": {
             1: HeadingStyleDef("黑体", 16),                    # # 文档标题（兜底）
@@ -82,10 +136,77 @@ DOCX_PRESETS = {
             4: HeadingStyleDef("宋体", 12, bold=True),         # #### 三级标题
         },
         "body_font": "宋体", "body_size": 12,
-        "line_spacing_multiple": 1.5,
+        "line_spacing_multiple": 1.3,
         "first_line_indent": 0.56,
         "align": "justify",
     },
+}
+
+NON_PREVIEW_BLOCK_STYLES = {
+    "standard": BlockStyleDef(
+        table=TableStyleDef(
+            content_width_cm=15.5,
+            adaptive_width=True,
+            header_fill="F6F8FA",
+            border_color="D0D7DE",
+            header_font_size=9.5,
+            body_font_size=9.5,
+        ),
+        callout=CalloutStyleDef(mode="box", fill="F6F8FA"),
+        code=CodeStyleDef(font_size=9.0, fill="F5F5F5"),
+        image=ImageStyleDef(max_width_cm=15.5, margin_cm=0.3),
+    ),
+    "official": BlockStyleDef(
+        table=TableStyleDef(
+            content_width_cm=15.2,
+            adaptive_width=False,
+            header_fill="",
+            border_color="666666",
+            header_font_size=9.5,
+            body_font_size=9.5,
+            cell_margin_top=45,
+            cell_margin_start=100,
+            cell_margin_bottom=45,
+            cell_margin_end=100,
+            gap_after_pt=2.0,
+        ),
+        callout=CalloutStyleDef(mode="official"),
+        code=CodeStyleDef(font_size=9.0, fill="FAFAFA"),
+        image=ImageStyleDef(max_width_cm=14.8, margin_cm=0.25),
+    ),
+    "internal": BlockStyleDef(
+        table=TableStyleDef(
+            content_width_cm=15.5,
+            adaptive_width=True,
+            header_fill="F2F3F5",
+            border_color="BFC5CC",
+            header_font_size=10.0,
+            body_font_size=10.0,
+            gap_after_pt=3.0,
+        ),
+        callout=CalloutStyleDef(mode="box", fill="F5F6F7"),
+        code=CodeStyleDef(font_size=9.0, fill="F5F5F5"),
+        image=ImageStyleDef(max_width_cm=15.5, margin_cm=0.25),
+    ),
+    "report": BlockStyleDef(
+        table=TableStyleDef(
+            content_width_cm=15.8,
+            adaptive_width=True,
+            header_fill="F3F4F6",
+            border_color="CBD5E1",
+            header_font_size=9.5,
+            body_font_size=9.5,
+            gap_after_pt=3.0,
+        ),
+        callout=CalloutStyleDef(mode="box", fill="F6F8FA"),
+        code=CodeStyleDef(font_size=9.0, fill="F6F8FA"),
+        image=ImageStyleDef(
+            max_width_cm=15.8,
+            min_width_cm=15.0,
+            min_width_source_threshold_cm=8.0,
+            margin_cm=0.28,
+        ),
+    ),
 }
 
 VALID_STYLES = frozenset(STYLE_ORDER)

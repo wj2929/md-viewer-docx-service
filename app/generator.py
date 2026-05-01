@@ -18,7 +18,7 @@ from typing import List, Optional, Dict
 from dataclasses import dataclass, field
 from enum import Enum
 
-from app.presets import HeadingStyleDef, DOCX_PRESETS, VALID_STYLES
+from app.presets import HeadingStyleDef, DOCX_PRESETS, VALID_STYLES, NON_PREVIEW_BLOCK_STYLES
 
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
@@ -109,6 +109,8 @@ _RE_CODE_FENCE = re.compile(r"^```")
 _RE_HR = re.compile(r"^(-{3,}|_{3,}|\*{3,})\s*$")
 _RE_TABLE_ROW = re.compile(r"^\|(.+)\|$")
 _RE_TABLE_SEP = re.compile(r"^\|[\s:|-]+\|$")
+_RE_NOTE_PREFIX = re.compile(r"^\s*(?:\*\*)?\s*(注意|说明|注|Note|Warning)\s*[:：]\s*(?:\*\*)?\s*", re.IGNORECASE)
+_RE_GFM_ALERT = re.compile(r"^\s*\[!(NOTE|WARNING|TIP|IMPORTANT)\]\s*", re.IGNORECASE)
 
 
 def parse_inline(text: str, ref_id_to_index: Optional[Dict[str, int]] = None) -> List[TextRun]:
@@ -564,6 +566,15 @@ def _preview_table_target_width_cm(rows: List[List[str]]) -> float:
     return min(PREVIEW_CONTENT_WIDTH_CM, target_width)
 
 
+def _adaptive_table_target_width_cm(rows: List[List[str]], content_width_cm: float) -> float:
+    if not rows:
+        return content_width_cm
+    n_cols = max(len(row) for row in rows)
+    if n_cols >= 4:
+        return content_width_cm
+    return min(content_width_cm, _preview_table_target_width_cm(rows))
+
+
 def _add_table(
     doc,
     rows: List[List[str]],
@@ -632,12 +643,216 @@ def _add_table(
                     )
 
 
+def _add_styled_table(
+    doc,
+    rows: List[List[str]],
+    table_style,
+    font_name: str,
+    ref_id_to_index: Optional[Dict[str, int]] = None,
+    east_asia_font_name: Optional[str] = None,
+    mono_font: str = "Courier New",
+    mono_east_asia_font: Optional[str] = None,
+):
+    """添加非 preview 样式表格。preview 继续走 _add_table(mode="preview")。"""
+    if not rows:
+        return
+
+    n_cols = max(len(row) for row in rows)
+    table_width = table_style.content_width_cm
+    if table_style.adaptive_width:
+        table_width = _adaptive_table_target_width_cm(rows, table_width)
+
+    table = doc.add_table(rows=len(rows), cols=n_cols, style="Table Grid")
+    table.autofit = False
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT if table_style.alignment == "left" else WD_TABLE_ALIGNMENT.CENTER
+    _set_table_width(table, table_width)
+    _set_table_borders(table, color=table_style.border_color, size=table_style.border_size)
+
+    column_widths = _preview_column_widths_cm(rows, table_width) if n_cols else []
+    for j, width_cm in enumerate(column_widths):
+        table.columns[j].width = Cm(width_cm)
+
+    for i, row_data in enumerate(rows):
+        _set_row_cant_split(table.rows[i])
+        for j, cell_text in enumerate(row_data):
+            if j >= n_cols:
+                continue
+            cell = table.cell(i, j)
+            if j < len(column_widths):
+                cell.width = Cm(column_widths[j])
+            cell.text = ""
+            _set_cell_margins(
+                cell,
+                top=table_style.cell_margin_top,
+                start=table_style.cell_margin_start,
+                bottom=table_style.cell_margin_bottom,
+                end=table_style.cell_margin_end,
+            )
+            if i == 0 and table_style.header_fill:
+                _set_cell_shading(cell, table_style.header_fill)
+
+            paragraph = cell.paragraphs[0]
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = table_style.line_spacing
+            font_size = Pt(table_style.header_font_size if i == 0 else table_style.body_font_size)
+
+            if i == 0:
+                run = paragraph.add_run(cell_text)
+                _set_run_fonts(run, font_name, east_asia_font_name)
+                run.font.size = font_size
+                run.bold = True
+            else:
+                _apply_runs(
+                    paragraph,
+                    parse_inline(cell_text, ref_id_to_index),
+                    font_name=font_name,
+                    font_size=font_size,
+                    east_asia_font_name=east_asia_font_name,
+                    code_font_name=mono_font,
+                    code_east_asia_font_name=mono_east_asia_font,
+                )
+
+
 def _add_preview_table_gap(doc):
     """模拟浏览器 Markdown 表格的 margin-bottom，避免表格紧贴后续正文。"""
     para = doc.add_paragraph()
     _set_paragraph_spacing(para, before=Pt(0), after=PREVIEW_TABLE_AFTER_SPACING, line=Pt(1))
     run = para.add_run("")
     run.font.size = Pt(1)
+
+
+def _add_table_gap(doc, after: Pt = Pt(4)):
+    para = doc.add_paragraph()
+    _set_paragraph_spacing(para, before=Pt(0), after=after, line=Pt(1))
+    run = para.add_run("")
+    run.font.size = Pt(1)
+
+
+def _extract_note_text(text: str) -> Optional[str]:
+    stripped = text.strip()
+    alert = _RE_GFM_ALERT.match(stripped)
+    if alert:
+        return stripped[alert.end():].strip()
+    prefix = _RE_NOTE_PREFIX.match(stripped)
+    if prefix:
+        return stripped[prefix.end():].strip()
+    return None
+
+
+def _add_box_callout(
+    doc,
+    text: str,
+    font_name: str,
+    body_size: Pt,
+    fill: str,
+    width_cm: float,
+    ref_id_to_index: Optional[Dict[str, int]] = None,
+    east_asia_font_name: Optional[str] = None,
+    mono_font: str = "Courier New",
+    mono_east_asia_font: Optional[str] = None,
+    link_underline: bool = True,
+):
+    table = doc.add_table(rows=1, cols=1)
+    table.autofit = False
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    _set_table_width(table, width_cm)
+    _set_table_borders(table, color=fill, size="0", val="nil")
+
+    cell = table.cell(0, 0)
+    cell.width = Cm(width_cm)
+    _set_cell_shading(cell, fill)
+    _set_cell_margins(cell, top=80, start=130, bottom=80, end=130)
+
+    para = cell.paragraphs[0]
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(0)
+    para.paragraph_format.line_spacing = PREVIEW_LIST_LINE_SPACING
+
+    for li, line in enumerate(text.split("\n")):
+        _apply_runs(
+            para,
+            parse_inline(line, ref_id_to_index),
+            font_name=font_name,
+            font_size=Pt(max(body_size.pt - 0.5, 8.0)),
+            east_asia_font_name=east_asia_font_name,
+            code_font_name=mono_font,
+            code_east_asia_font_name=mono_east_asia_font,
+            link_underline=link_underline,
+        )
+        if li < len(text.split("\n")) - 1:
+            para.add_run().add_break()
+
+    for run in para.runs:
+        run.font.color.rgb = RGBColor(0x57, 0x60, 0x6A)
+
+    _add_table_gap(doc, after=Pt(4))
+
+
+def _add_non_preview_callout(
+    doc,
+    text: str,
+    font_name: str,
+    body_size: Pt,
+    block_style,
+    ref_id_to_index: Optional[Dict[str, int]] = None,
+    east_asia_font_name: Optional[str] = None,
+    mono_font: str = "Courier New",
+    mono_east_asia_font: Optional[str] = None,
+    link_underline: bool = True,
+):
+    note_text = _extract_note_text(text)
+    if block_style.callout.mode == "official":
+        para = doc.add_paragraph()
+        para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        para.paragraph_format.left_indent = Cm(0.74)
+        display_text = f"{block_style.callout.note_prefix}{note_text}" if note_text is not None else text
+        _apply_runs(
+            para,
+            parse_inline(display_text, ref_id_to_index),
+            font_name=font_name,
+            font_size=body_size,
+            east_asia_font_name=east_asia_font_name,
+            code_font_name=mono_font,
+            code_east_asia_font_name=mono_east_asia_font,
+            link_underline=link_underline,
+        )
+        _set_paragraph_spacing(para, before=Pt(2), after=Pt(2))
+        return
+
+    if note_text is not None:
+        _add_box_callout(
+            doc,
+            text,
+            font_name,
+            body_size,
+            fill=block_style.callout.fill or "F6F8FA",
+            width_cm=block_style.table.content_width_cm,
+            ref_id_to_index=ref_id_to_index,
+            east_asia_font_name=east_asia_font_name,
+            mono_font=mono_font,
+            mono_east_asia_font=mono_east_asia_font,
+            link_underline=link_underline,
+        )
+        return
+
+    para = doc.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    para.paragraph_format.left_indent = Cm(0.74)
+    for li, line in enumerate(text.split("\n")):
+        _apply_runs(
+            para,
+            parse_inline(line, ref_id_to_index),
+            font_name=font_name,
+            font_size=Pt(max(body_size.pt + block_style.callout.font_size_delta, 8.0)),
+            east_asia_font_name=east_asia_font_name,
+            code_font_name=mono_font,
+            code_east_asia_font_name=mono_east_asia_font,
+            link_underline=link_underline,
+        )
+        if li < len(text.split("\n")) - 1:
+            para.add_run().add_break()
+    _set_paragraph_spacing(para, before=Pt(2), after=Pt(2))
 
 
 def _add_preview_callout(
@@ -705,6 +920,8 @@ def generate_standard_docx(
 
     # 页面设置
     section = doc.sections[0]
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
     section.top_margin = Cm(2.54)
     section.bottom_margin = Cm(2.54)
     section.left_margin = Cm(3.17)
@@ -776,6 +993,8 @@ def generate_official_docx(
 
     # 页面设置（公文标准页边距）
     section = doc.sections[0]
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
     section.top_margin = Cm(3.7)
     section.bottom_margin = Cm(3.5)
     section.left_margin = Cm(2.8)
@@ -851,6 +1070,7 @@ def _render_blocks(
     list_spacing_after: Pt = Pt(1),
     list_line_spacing=None,
     link_underline: bool = True,
+    block_style=None,
 ):
     """将解析后的 Block 列表渲染到 Word 文档
 
@@ -986,6 +1206,20 @@ def _render_blocks(
             prev_was_ol = True
 
         elif block.type == BlockType.TABLE:
+            if block_style is not None:
+                _add_styled_table(
+                    doc,
+                    block.rows,
+                    table_style=block_style.table,
+                    font_name=font_name,
+                    ref_id_to_index=ref_id_to_index,
+                    east_asia_font_name=east_asia_font_name,
+                    mono_font=mono_font,
+                    mono_east_asia_font=mono_east_asia_font,
+                )
+                _add_table_gap(doc, after=Pt(block_style.table.gap_after_pt))
+                continue
+
             table_font_size = PREVIEW_TABLE_FONT_SIZE if table_mode == "preview" else Pt(body_size.pt - 1.5)
             _add_table(
                 doc,
@@ -1003,23 +1237,48 @@ def _render_blocks(
 
         elif block.type == BlockType.CODE_BLOCK:
             code_font = mono_font if code_mode == "preview" else "Courier New"
-            CODE_BLOCK_FONT_SIZE = Pt(8.5 if code_mode == "preview" else 9)
+            code_font_size = Pt(
+                block_style.code.font_size
+                if block_style is not None
+                else (8.5 if code_mode == "preview" else 9)
+            )
+            code_fill = (
+                block_style.code.fill
+                if block_style is not None
+                else ("F6F8FA" if code_mode == "preview" else "F5F5F5")
+            )
+            code_line_spacing = block_style.code.line_spacing if block_style is not None else 1.0
             para = doc.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.LEFT
             run = para.add_run(block.text)
             _set_run_fonts(run, code_font, mono_east_asia_font if code_mode == "preview" else code_font)
-            run.font.size = CODE_BLOCK_FONT_SIZE
+            run.font.size = code_font_size
             run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
             shading = para._element.makeelement(qn("w:shd"), {
                 qn("w:val"): "clear",
                 qn("w:color"): "auto",
-                qn("w:fill"): "F6F8FA" if code_mode == "preview" else "F5F5F5",
+                qn("w:fill"): code_fill,
             })
             para._element.get_or_add_pPr().append(shading)
             _set_paragraph_spacing(para, before=Pt(4), after=Pt(4))
-            para.paragraph_format.line_spacing = 1.0
+            para.paragraph_format.line_spacing = code_line_spacing
 
         elif block.type == BlockType.BLOCKQUOTE:
+            if block_style is not None:
+                _add_non_preview_callout(
+                    doc,
+                    block.text,
+                    font_name=font_name,
+                    body_size=body_size,
+                    block_style=block_style,
+                    ref_id_to_index=ref_id_to_index,
+                    east_asia_font_name=east_asia_font_name,
+                    mono_font=mono_font,
+                    mono_east_asia_font=mono_east_asia_font,
+                    link_underline=link_underline,
+                )
+                continue
+
             if preview_mode:
                 _add_preview_callout(
                     doc,
@@ -1234,6 +1493,8 @@ def generate_docx_from_content(
 
     # 页面设置
     section = doc.sections[0]
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
     margins = preset["page_margins"]
     section.top_margin = Cm(margins["top"])
     section.bottom_margin = Cm(margins["bottom"])
@@ -1252,11 +1513,8 @@ def generate_docx_from_content(
 
     # 标题行距
     line_sp = Pt(preset["line_spacing"]) if "line_spacing" in preset else None
-    _set_paragraph_spacing(title_para, before=Pt(0), after=Pt(16), line=line_sp)
-
-    # 空行
-    sep = doc.add_paragraph()
-    _set_paragraph_spacing(sep, line=line_sp)
+    title_after = Pt(10 if style == "official" else 8)
+    _set_paragraph_spacing(title_para, before=Pt(0), after=title_after, line=line_sp)
 
     # 正文渲染参数
     body_font = preset["body_font"]
@@ -1285,12 +1543,17 @@ def generate_docx_from_content(
         align=align_val,
         heading_styles=preset.get("heading_styles"),
         ref_id_to_index=ref_id_to_index,
+        heading_spacing_before=Pt(8 if style == "official" else 6),
+        heading_spacing_after=Pt(4),
+        list_spacing_before=Pt(0),
+        list_spacing_after=Pt(0),
+        block_style=NON_PREVIEW_BLOCK_STYLES.get(style),
     )
 
     # 倍数行距需要额外处理（_render_blocks 只支持固定行距参数）
     if "line_spacing_multiple" in preset:
         from docx.shared import Emu
-        for para in doc.paragraphs[2:]:  # 跳过标题和分隔段
+        for para in doc.paragraphs[1:]:  # 跳过标题
             pf = para.paragraph_format
             if pf.line_spacing is None:
                 pf.line_spacing = preset["line_spacing_multiple"]
@@ -1436,10 +1699,12 @@ def _generate_standard_from_content(
 
     # 标准页面设置
     section = doc.sections[0]
-    section.top_margin = Cm(2.54)
-    section.bottom_margin = Cm(2.54)
-    section.left_margin = Cm(3.17)
-    section.right_margin = Cm(3.17)
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
+    section.top_margin = Cm(2.3)
+    section.bottom_margin = Cm(2.3)
+    section.left_margin = Cm(2.54)
+    section.right_margin = Cm(2.54)
 
     # standard 模式用现代无衬线字体（与 PDF 导出风格一致）
     std_body_font = "微软雅黑"
@@ -1456,15 +1721,17 @@ def _generate_standard_from_content(
         title_run.font.size = Pt(20)
         title_run.bold = True
         title_run.font.color.rgb = RGBColor(0x1a, 0x1a, 0x1a)
-        _set_paragraph_spacing(title_para, before=Pt(12), after=Pt(12))
-        doc.add_paragraph("")
+        _set_paragraph_spacing(title_para, before=Pt(4), after=Pt(8))
 
     # 渲染（跳过第一个 H1 标题，避免和顶部标题重复）
     blocks = parse_markdown(content, ref_id_to_index)
     if blocks and blocks[0].type == BlockType.HEADING and blocks[0].level == 1:
         blocks = blocks[1:]
     _render_blocks(doc, blocks, font_name=std_body_font, body_size=std_body_size,
-                   heading_font=std_heading_font, ref_id_to_index=ref_id_to_index)
+                   heading_font=std_heading_font, ref_id_to_index=ref_id_to_index,
+                   heading_spacing_before=Pt(8), heading_spacing_after=Pt(4),
+                   list_spacing_before=Pt(0), list_spacing_after=Pt(0),
+                   block_style=NON_PREVIEW_BLOCK_STYLES["standard"])
 
     # 参考来源
     if references:

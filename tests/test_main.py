@@ -66,6 +66,29 @@ class TestConvertPlainText:
         })
         assert resp.status_code in (400, 422)
 
+    def test_invalid_style_returns_style_invalid(self, client):
+        resp = client.post("/convert", json={
+            "markdown": "# Test",
+            "style": "missing",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "STYLE_INVALID"
+
+    @pytest.mark.parametrize("style", ["standard", "official", "internal", "report"])
+    def test_non_preview_styles_convert_complex_markdown(self, client, style):
+        resp = client.post("/convert", json={
+            "markdown": (
+                "# 标题\n\n"
+                "| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+                "> **注意：** 说明内容\n\n"
+                "```bash\nkubectl get pods\n```"
+            ),
+            "style": style,
+        })
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        assert len(resp.content) > 10_000
+
     def test_response_headers(self, client):
         resp = client.post("/convert", json={"markdown": "# Test"})
         assert "x-service-version" in resp.headers
@@ -92,6 +115,19 @@ class TestConvertWithImages:
         })
         assert resp.status_code == 200
         assert resp.headers.get("x-charts-rendered") == "1"
+
+    def test_invalid_request_image_reports_warning(self, client):
+        resp = client.post("/convert", json={
+            "markdown": "# Test\n\n![](mdv__chart__aabb0011__)",
+            "images": [{
+                "id": "mdv__chart__aabb0011__",
+                "pngBase64": "not-valid",
+                "widthCm": 15.5,
+            }],
+            "style": "report",
+        })
+        assert resp.status_code == 200
+        assert "failed validation" in resp.headers.get("x-convert-warnings", "")
 
 
 class TestRenderChartsSlimMode:

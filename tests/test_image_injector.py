@@ -7,7 +7,7 @@ from docx import Document
 
 from app.image_injector import (
     ImageData, PLACEHOLDER_PATTERN, IMAGE_MAX_B64_LEN, IMAGE_MAX_PIXELS,
-    preprocess_markdown, inject_images,
+    preprocess_markdown, inject_images, ImageLayout,
 )
 
 
@@ -157,3 +157,16 @@ class TestImageWidth:
         assert resolve_image_width_cm(15.5, style="preview") == 18.5
         assert resolve_image_width_cm(20.0, style="preview") == 19.0
         assert resolve_image_width_cm(15.5, style="standard") == 15.5
+
+    def test_non_preview_image_widths_can_be_clamped_by_layout(self):
+        from app.image_injector import resolve_image_width_cm
+
+        assert resolve_image_width_cm(20.0, style="standard", layout=ImageLayout(max_width_cm=15.5)) == 15.5
+        assert resolve_image_width_cm(20.0, style="official", layout=ImageLayout(max_width_cm=14.8)) == 14.8
+
+    def test_report_does_not_enlarge_tiny_images(self):
+        from app.image_injector import resolve_image_width_cm
+
+        layout = ImageLayout(max_width_cm=15.8, min_width_cm=15.0, min_width_source_threshold_cm=8.0)
+        assert resolve_image_width_cm(3.0, style="report", layout=layout) == 3.0
+        assert resolve_image_width_cm(10.0, style="report", layout=layout) == 15.0
