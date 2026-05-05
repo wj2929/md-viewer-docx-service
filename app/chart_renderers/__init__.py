@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import io
 import html
+import math
 import os
 from pathlib import Path
 import re
@@ -22,6 +23,9 @@ SUPPORTED_CHART_LANGS = {"mermaid", "echarts", "dot", "graphviz", "markmap", "pl
 FENCE_RE = re.compile(r"```([A-Za-z0-9_-]+)\n([\s\S]*?)```", re.MULTILINE)
 BLOCK_MATH_RE = re.compile(r"\$\$\n?([\s\S]*?)\n?\$\$", re.MULTILINE)
 INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+)\$(?!\$)")
+DOCX_IMAGE_MAX_PIXELS = 20_000_000
+DOCX_CHART_MAX_WIDTH_CM = 15.5
+DOCX_CHART_MAX_HEIGHT_CM = 24.0
 
 
 @dataclass
@@ -71,9 +75,14 @@ def render_charts_and_formulas_sync(
     def replace_block_math(match: re.Match[str]) -> str:
         expr = match.group(1).strip()
         placeholder = _new_placeholder()
+        try:
+            png = _render_katex_png(expr, display_mode=True)
+        except Exception as exc:
+            png = _render_text_png(expr, title="KaTeX 公式渲染失败，已保留源码图")
+            result.warnings.append(f"katex render fallback: {exc}")
         result.images[placeholder] = RenderedImage(
             id=placeholder,
-            png_bytes=_render_text_png(expr, title="KaTeX 公式"),
+            png_bytes=png,
             width_cm=12.0,
         )
         return f"![]({placeholder})"
@@ -83,9 +92,14 @@ def render_charts_and_formulas_sync(
     def replace_inline_math(match: re.Match[str]) -> str:
         expr = match.group(1).strip()
         placeholder = _new_placeholder()
+        try:
+            png = _render_katex_png(expr, display_mode=False)
+        except Exception as exc:
+            png = _render_text_png(expr, title="行内公式渲染失败，已保留源码图")
+            result.warnings.append(f"katex render fallback: {exc}")
         result.images[placeholder] = RenderedImage(
             id=placeholder,
-            png_bytes=_render_text_png(expr, title="行内公式"),
+            png_bytes=png,
             width_cm=8.0,
         )
         return f"\n\n![]({placeholder})\n\n"
@@ -148,13 +162,42 @@ def _render_browser_chart_png(lang: str, code: str) -> bytes:
             pass
 
 
+def _render_katex_png(expr: str, display_mode: bool) -> bytes:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise RuntimeError("playwright is not installed") from exc
+
+    html_path = _write_katex_html(expr, display_mode)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            page = browser.new_page(viewport={"width": 1280, "height": 420}, device_scale_factor=2)
+            page.goto(html_path.as_uri(), wait_until="networkidle", timeout=20_000)
+            page.wait_for_function("window.__mdvDone === true || window.__mdvError", timeout=20_000)
+            error = page.evaluate("window.__mdvError || ''")
+            if error:
+                raise RuntimeError(str(error)[:300])
+            locator = page.locator("#capture")
+            png = locator.screenshot(type="png", timeout=10_000)
+            browser.close()
+            return png
+    finally:
+        try:
+            html_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def _write_chart_html(lang: str, code: str) -> Path:
-    assets = _resolve_browser_assets()
     if lang == "echarts":
+        assets = _resolve_browser_assets(["echarts"])
         body = _echarts_html(code, assets)
     elif lang == "mermaid":
+        assets = _resolve_browser_assets(["mermaid"])
         body = _mermaid_html(code, assets)
     elif lang == "markmap":
+        assets = _resolve_browser_assets(["d3", "markmap_lib", "markmap_view"])
         body = _markmap_html(code, assets)
     else:
         raise RuntimeError(f"unsupported browser renderer: {lang}")
@@ -165,7 +208,38 @@ def _write_chart_html(lang: str, code: str) -> Path:
     return Path(tmp_name)
 
 
-def _resolve_browser_assets() -> dict[str, str]:
+def _write_katex_html(expr: str, display_mode: bool) -> Path:
+    assets = _resolve_browser_assets(["katex", "katex_css"])
+    scripts = f"""
+  <link rel="stylesheet" href="{html.escape(assets["katex_css"])}">
+  <script src="{html.escape(assets["katex"])}"></script>
+"""
+    render_script = """
+    (() => {
+      try {
+        const el = document.getElementById('capture');
+        katex.render(SOURCE, el, {
+          throwOnError: false,
+          displayMode: DISPLAY_MODE,
+          output: 'html',
+          strict: false,
+          trust: false
+        });
+        requestAnimationFrame(() => { window.__mdvDone = true; });
+      } catch (error) {
+        window.__mdvError = error && error.message ? error.message : String(error);
+      }
+    })();
+    """.replace("DISPLAY_MODE", "true" if display_mode else "false")
+
+    body = _base_html(expr, scripts, render_script, capture_class="katex-capture")
+    fd, tmp_name = tempfile.mkstemp(prefix="mdv-katex-", suffix=".html")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(body)
+    return Path(tmp_name)
+
+
+def _resolve_browser_assets(required: Iterable[str]) -> dict[str, str]:
     roots = [
         Path(__file__).resolve().parents[2] / "node_modules",
         Path(__file__).resolve().parents[3] / "md-viewer" / "node_modules",
@@ -180,14 +254,17 @@ def _resolve_browser_assets() -> dict[str, str]:
         "d3": found_root / "d3" / "dist" / "d3.min.js",
         "markmap_lib": found_root / "markmap-lib" / "dist" / "browser" / "index.iife.js",
         "markmap_view": found_root / "markmap-view" / "dist" / "browser" / "index.js",
+        "katex": found_root / "katex" / "dist" / "katex.min.js",
+        "katex_css": found_root / "katex" / "dist" / "katex.min.css",
     }
-    missing = [name for name, path in paths.items() if not path.exists()]
+    required_set = set(required)
+    missing = [name for name in required_set if not paths[name].exists()]
     if missing:
         raise RuntimeError(f"missing chart renderer assets: {', '.join(missing)}")
-    return {name: path.as_uri() for name, path in paths.items()}
+    return {name: path.as_uri() for name, path in paths.items() if name in required_set}
 
 
-def _base_html(source: str, scripts: str, render_script: str) -> str:
+def _base_html(source: str, scripts: str, render_script: str, capture_class: str = "") -> str:
     return f"""<!doctype html>
 <html>
 <head>
@@ -195,12 +272,15 @@ def _base_html(source: str, scripts: str, render_script: str) -> str:
   <style>
     html, body {{ margin: 0; padding: 0; background: white; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "PingFang SC", Arial, sans-serif; }}
     #capture {{ width: 1170px; min-height: 420px; background: white; padding: 24px; box-sizing: border-box; }}
+    #capture.katex-capture {{ min-height: 0; display: inline-block; width: auto; max-width: 1170px; padding: 28px 36px; font-size: 28px; line-height: 1.6; }}
+    #capture.katex-capture .katex-display {{ margin: 0; text-align: center; }}
+    #capture.katex-capture .katex {{ color: #1A1A1A; }}
     svg {{ max-width: 100%; }}
   </style>
   {scripts}
 </head>
 <body>
-  <div id="capture"></div>
+  <div id="capture" class="{html.escape(capture_class)}"></div>
   <script>
     const SOURCE = {source!r};
     {render_script}
@@ -325,12 +405,33 @@ def _render_text_png(text: str, title: str) -> bytes:
     return buf.getvalue()
 
 
+def _docx_safe_chart_image(image: RenderedImage) -> RenderedImage:
+    with Image.open(io.BytesIO(image.png_bytes)) as source:
+        width, height = source.size
+        next_image = source.copy()
+
+    if width * height > DOCX_IMAGE_MAX_PIXELS:
+        scale = math.sqrt(DOCX_IMAGE_MAX_PIXELS / (width * height))
+        width = max(1, int(width * scale))
+        height = max(1, int(height * scale))
+        resampling = getattr(Image, "Resampling", Image).LANCZOS
+        next_image = next_image.resize((width, height), resampling)
+
+    ratio = height / width if width > 0 else 1
+    width_cm = min(image.width_cm, DOCX_CHART_MAX_WIDTH_CM, DOCX_CHART_MAX_HEIGHT_CM / ratio)
+    width_cm = max(4.0, round(width_cm, 2))
+
+    buf = io.BytesIO()
+    next_image.save(buf, format="PNG")
+    return RenderedImage(id=image.id, png_bytes=buf.getvalue(), width_cm=width_cm)
+
+
 def rendered_images_to_base64(images: dict[str, RenderedImage]) -> list[dict]:
     return [
         {
-            "id": image.id,
-            "pngBase64": base64.b64encode(image.png_bytes).decode("ascii"),
-            "widthCm": image.width_cm,
+            "id": safe_image.id,
+            "pngBase64": base64.b64encode(safe_image.png_bytes).decode("ascii"),
+            "widthCm": safe_image.width_cm,
         }
-        for image in images.values()
+        for safe_image in (_docx_safe_chart_image(image) for image in images.values())
     ]

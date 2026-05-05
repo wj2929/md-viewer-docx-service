@@ -391,6 +391,14 @@ def _set_paragraph_spacing(paragraph, before: Pt = Pt(0), after: Pt = Pt(0), lin
         pf.line_spacing = line
 
 
+def _disable_paragraph_keep_constraints(paragraph):
+    """避免 Word 内置 Heading 样式把标题和后续大图整组推到下一页。"""
+    pf = paragraph.paragraph_format
+    pf.keep_with_next = False
+    pf.keep_together = False
+    pf.page_break_before = False
+
+
 def _available_font_families() -> set[str]:
     try:
         result = subprocess.run(
@@ -1142,6 +1150,7 @@ def _render_blocks(
                     for attr in ['themeColor', 'themeShade', 'themeTint']:
                         color_el.attrib.pop(qn(f'w:{attr}'), None)
             _set_paragraph_spacing(para, before=heading_spacing_before, after=heading_spacing_after, line=line_spacing)
+            _disable_paragraph_keep_constraints(para)
 
         elif block.type == BlockType.PARAGRAPH:
             para = doc.add_paragraph()

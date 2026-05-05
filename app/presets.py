@@ -55,6 +55,7 @@ class CodeStyleDef:
 class ImageStyleDef:
     """非 preview 图片布局样式定义"""
     max_width_cm: float
+    max_height_cm: float = 14.8
     min_width_cm: float = 0.0
     min_width_source_threshold_cm: float = 0.0
     margin_cm: float = 0.3
@@ -154,7 +155,7 @@ NON_PREVIEW_BLOCK_STYLES = {
         ),
         callout=CalloutStyleDef(mode="box", fill="F6F8FA"),
         code=CodeStyleDef(font_size=9.0, fill="F5F5F5"),
-        image=ImageStyleDef(max_width_cm=15.5, margin_cm=0.3),
+        image=ImageStyleDef(max_width_cm=15.5, max_height_cm=14.8, margin_cm=0.3),
     ),
     "official": BlockStyleDef(
         table=TableStyleDef(
@@ -172,7 +173,7 @@ NON_PREVIEW_BLOCK_STYLES = {
         ),
         callout=CalloutStyleDef(mode="official"),
         code=CodeStyleDef(font_size=9.0, fill="FAFAFA"),
-        image=ImageStyleDef(max_width_cm=14.8, margin_cm=0.25),
+        image=ImageStyleDef(max_width_cm=14.8, max_height_cm=14.8, margin_cm=0.25),
     ),
     "internal": BlockStyleDef(
         table=TableStyleDef(
@@ -186,7 +187,7 @@ NON_PREVIEW_BLOCK_STYLES = {
         ),
         callout=CalloutStyleDef(mode="box", fill="F5F6F7"),
         code=CodeStyleDef(font_size=9.0, fill="F5F5F5"),
-        image=ImageStyleDef(max_width_cm=15.5, margin_cm=0.25),
+        image=ImageStyleDef(max_width_cm=15.5, max_height_cm=14.8, margin_cm=0.25),
     ),
     "report": BlockStyleDef(
         table=TableStyleDef(
@@ -202,6 +203,7 @@ NON_PREVIEW_BLOCK_STYLES = {
         code=CodeStyleDef(font_size=9.0, fill="F6F8FA"),
         image=ImageStyleDef(
             max_width_cm=15.8,
+            max_height_cm=14.8,
             min_width_cm=15.0,
             min_width_source_threshold_cm=8.0,
             margin_cm=0.28,

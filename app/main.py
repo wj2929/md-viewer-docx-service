@@ -93,6 +93,7 @@ def _image_layout_for_style(style: str) -> ImageLayout | None:
     image = block_style.image
     return ImageLayout(
         max_width_cm=image.max_width_cm,
+        max_height_cm=image.max_height_cm,
         min_width_cm=image.min_width_cm,
         min_width_source_threshold_cm=image.min_width_source_threshold_cm,
         margin_cm=image.margin_cm,
@@ -163,7 +164,7 @@ async def convert(req: ConvertRequest, request: Request):
     warnings.extend(reference_warnings)
 
     if req.images:
-        chart_result = await asyncio.to_thread(render_charts_and_formulas_sync, md, [])
+        chart_result = await asyncio.to_thread(render_charts_and_formulas_sync, md, req.chartRenderers or None)
         md = chart_result.markdown
         rendered_images = rendered_images_to_base64(chart_result.images)
         warnings.extend(chart_result.warnings)

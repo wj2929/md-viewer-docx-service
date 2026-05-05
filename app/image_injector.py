@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Optional
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Cm
 from PIL import Image
 
@@ -29,13 +30,14 @@ DEFAULT_IMAGE_MARGIN_CM = 0.3
 @dataclass(frozen=True)
 class ImageLayout:
     max_width_cm: float
+    max_height_cm: float = 24.0
     min_width_cm: float = 0.0
     min_width_source_threshold_cm: float = 0.0
     margin_cm: float = DEFAULT_IMAGE_MARGIN_CM
 
 
 class ImageData:
-    __slots__ = ("id", "png_bytes", "width_cm")
+    __slots__ = ("id", "png_bytes", "width_cm", "pixel_width", "pixel_height")
 
     def __init__(self, id: str, png_base64: str, width_cm: float = 15.5):
         self.id = id
@@ -47,11 +49,18 @@ class ImageData:
         img = Image.open(io.BytesIO(self.png_bytes))
         img.verify()
         w, h = img.size
+        self.pixel_width = w
+        self.pixel_height = h
         if w * h > IMAGE_MAX_PIXELS:
             raise ValueError(f"Image {id}: {w}x{h} = {w*h} pixels exceeds limit {IMAGE_MAX_PIXELS}")
 
 
-def resolve_image_width_cm(width_cm: float, style: str = "standard", layout: Optional[ImageLayout] = None) -> float:
+def resolve_image_width_cm(
+    width_cm: float,
+    style: str = "standard",
+    layout: Optional[ImageLayout] = None,
+    image_size: Optional[tuple[int, int]] = None,
+) -> float:
     """根据导出样式解析图片插入宽度。"""
     if layout is not None:
         resolved = min(width_cm, layout.max_width_cm)
@@ -62,13 +71,18 @@ def resolve_image_width_cm(width_cm: float, style: str = "standard", layout: Opt
         )
         if should_enlarge:
             resolved = min(layout.min_width_cm, layout.max_width_cm)
+        if image_size:
+            pixel_width, pixel_height = image_size
+            if pixel_width > 0 and pixel_height > 0:
+                ratio = pixel_height / pixel_width
+                if ratio > 0:
+                    resolved = min(resolved, layout.max_height_cm / ratio)
+        resolved = max(1.0, resolved)
         return resolved
 
-    if style != "preview":
-        return width_cm
-    if width_cm < 18.0:
-        return 18.5
-    return min(width_cm, 19.0)
+    if style == "preview":
+        return min(width_cm, 19.0)
+    return width_cm
 
 
 def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, ImageData]]:
@@ -129,7 +143,12 @@ def inject_images(
         run = para.add_run()
         run.add_picture(
             io.BytesIO(img_data.png_bytes),
-            width=Cm(resolve_image_width_cm(img_data.width_cm, style, layout)),
+            width=Cm(resolve_image_width_cm(
+                img_data.width_cm,
+                style,
+                layout,
+                (img_data.pixel_width, img_data.pixel_height),
+            )),
         )
         injected += 1
 
@@ -143,6 +162,7 @@ def inject_images(
         )
         pf.space_before = Cm(margin_cm)
         pf.space_after = Cm(margin_cm)
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         logger.info(f"[ImageInjector] Injected {placeholder_id} ({len(img_data.png_bytes)} bytes)")
 

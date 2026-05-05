@@ -26,6 +26,16 @@ def _left_borders(path):
     return _xml_tree(path).xpath("//w:pBdr/w:left", namespaces=NS)
 
 
+def _paragraph_by_text(path, text):
+    matches = _xml_tree(path).xpath(
+        "//w:p[.//w:t[text()=$text]]",
+        namespaces=NS,
+        text=text,
+    )
+    assert matches, f"paragraph not found: {text}"
+    return matches[0]
+
+
 def test_non_preview_styles_use_a4_page_size(tmp_path):
     for style in ("standard", "official", "internal", "report"):
         out_path = tmp_path / f"{style}-a4.docx"
@@ -37,6 +47,32 @@ def test_non_preview_styles_use_a4_page_size(tmp_path):
         section = Document(out_path).sections[0]
         assert round(section.page_width.cm, 1) == 21.0
         assert round(section.page_height.cm, 1) == 29.7
+
+
+def test_non_preview_headings_disable_word_keep_constraints(tmp_path):
+    for style in ("standard", "official", "internal", "report"):
+        out_path = tmp_path / f"{style}-heading-flow.docx"
+        generate_docx_from_content(
+            content="# 标题\n\n> 摘要说明\n\n## 1. 图表\n\n### 1.1 流程图\n\n![](mdv__chart__deadbeef__)",
+            output_path=str(out_path),
+            style=style,
+        )
+
+        for heading_text in ("1. 图表", "1.1 流程图"):
+            para = _paragraph_by_text(out_path, heading_text)
+            keep_next = para.xpath("./w:pPr/w:keepNext/@w:val", namespaces=NS)
+            keep_lines = para.xpath("./w:pPr/w:keepLines/@w:val", namespaces=NS)
+            assert keep_next == ["0"]
+            assert keep_lines == ["0"]
+
+
+def test_non_preview_image_layout_caps_page_height():
+    from app.main import _image_layout_for_style
+
+    for style in ("standard", "official", "internal", "report"):
+        layout = _image_layout_for_style(style)
+        assert layout is not None
+        assert layout.max_height_cm <= 15.0
 
 
 def test_standard_table_has_header_fill_and_cell_margins(tmp_path):

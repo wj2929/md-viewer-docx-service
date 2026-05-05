@@ -8,6 +8,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.chart_renderers import RenderResult
 
 
 @pytest.fixture
@@ -128,6 +129,22 @@ class TestConvertWithImages:
         })
         assert resp.status_code == 200
         assert resp.headers.get("x-charts-rendered") == "1"
+
+    def test_with_client_images_still_attempts_server_render_for_remaining_supported_charts(self, client, small_png_base64):
+        markdown = "# Test\n\n![](mdv__chart__aabb0011__)\n\n```mermaid\nclassDiagram\n  A <|-- B\n```"
+        with patch("app.main.render_charts_and_formulas_sync") as render_mock:
+            render_mock.return_value = RenderResult(markdown=markdown)
+            resp = client.post("/convert", json={
+                "markdown": markdown,
+                "images": [{
+                    "id": "mdv__chart__aabb0011__",
+                    "pngBase64": small_png_base64,
+                    "widthCm": 15.5,
+                }],
+            })
+
+        assert resp.status_code == 200
+        assert render_mock.call_args.args[1] is None
 
     def test_with_alt_text_image_placeholder_injects_image(self, client, small_png_base64):
         resp = client.post("/convert", json={

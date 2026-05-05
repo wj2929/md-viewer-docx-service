@@ -4,6 +4,7 @@ import re
 import pytest
 from PIL import Image
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from app.image_injector import (
     ImageData, PLACEHOLDER_PATTERN, IMAGE_MAX_B64_LEN, IMAGE_MAX_PIXELS,
@@ -157,13 +158,15 @@ class TestInjectImages:
         image_para = next(p for p in doc.paragraphs if p._element.xpath(".//w:drawing"))
         assert round(image_para.paragraph_format.space_before.cm, 2) == 0.45
         assert round(image_para.paragraph_format.space_after.cm, 2) == 0.45
+        assert image_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
 
 
 class TestImageWidth:
-    def test_preview_clamps_image_width_to_content_width(self):
+    def test_preview_respects_client_image_width_without_forced_enlarge(self):
         from app.image_injector import resolve_image_width_cm
 
-        assert resolve_image_width_cm(15.5, style="preview") == 18.5
+        assert resolve_image_width_cm(9.0, style="preview") == 9.0
+        assert resolve_image_width_cm(15.5, style="preview") == 15.5
         assert resolve_image_width_cm(20.0, style="preview") == 19.0
         assert resolve_image_width_cm(15.5, style="standard") == 15.5
 
@@ -179,3 +182,16 @@ class TestImageWidth:
         layout = ImageLayout(max_width_cm=15.8, min_width_cm=15.0, min_width_source_threshold_cm=8.0)
         assert resolve_image_width_cm(3.0, style="report", layout=layout) == 3.0
         assert resolve_image_width_cm(10.0, style="report", layout=layout) == 15.0
+
+    def test_non_preview_tall_images_are_clamped_by_height_budget(self):
+        from app.image_injector import resolve_image_width_cm
+
+        layout = ImageLayout(
+            max_width_cm=15.8,
+            max_height_cm=24.0,
+            min_width_cm=15.0,
+            min_width_source_threshold_cm=8.0,
+        )
+
+        assert round(resolve_image_width_cm(10.0, style="report", layout=layout, image_size=(1000, 3000)), 2) == 8.0
+        assert round(resolve_image_width_cm(15.5, style="official", layout=layout, image_size=(1000, 2000)), 2) == 12.0
