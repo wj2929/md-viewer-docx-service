@@ -26,6 +26,19 @@ class TestHealthz:
                      "minClientVersion", "maxImagesPerRequest"):
             assert key in data, f"Missing key: {key}"
 
+    def test_healthz_does_not_report_fixed_image_cap(self, client):
+        data = client.get("/healthz").json()
+        assert data["maxImagesPerRequest"] is None
+
+    def test_get_available_fonts_includes_env_font_files(self, tmp_path, monkeypatch):
+        from app.main import _get_available_fonts
+
+        font_path = tmp_path / "NotoSansCJKsc-Regular.otf"
+        font_path.write_bytes(b"fake-font-bytes")
+        monkeypatch.setenv("MD_VIEWER_DOCX_FONT_PATHS", str(font_path))
+
+        assert "NotoSansCJKsc-Regular" in _get_available_fonts()
+
     def test_status_is_ok(self, client):
         data = client.get("/healthz").json()
         assert data["status"] == "ok"
@@ -115,6 +128,42 @@ class TestConvertWithImages:
         })
         assert resp.status_code == 200
         assert resp.headers.get("x-charts-rendered") == "1"
+
+    def test_with_alt_text_image_placeholder_injects_image(self, client, small_png_base64):
+        resp = client.post("/convert", json={
+            "markdown": "# Test\n\n![基础流程](mdv__chart__aabb0011__)",
+            "images": [{
+                "id": "mdv__chart__aabb0011__",
+                "pngBase64": small_png_base64,
+                "widthCm": 15.5,
+            }],
+        })
+
+        assert resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+            media_entries = [name for name in z.namelist() if name.startswith("word/media/")]
+            document_xml = z.read("word/document.xml").decode("utf-8")
+        assert len(media_entries) == 1
+        assert "mdv__chart__aabb0011__" not in document_xml
+
+    def test_accepts_more_than_fifty_client_rendered_images(self, client, small_png_base64):
+        images = [
+            {
+                "id": f"mdv__chart__{index:08x}__",
+                "pngBase64": small_png_base64,
+                "widthCm": 15.5,
+            }
+            for index in range(51)
+        ]
+        markdown = "# Test\n\n" + "\n\n".join(f"![]({image['id']})" for image in images)
+
+        resp = client.post("/convert", json={
+            "markdown": markdown,
+            "images": images,
+        })
+
+        assert resp.status_code == 200
+        assert resp.headers.get("x-charts-rendered") == "51"
 
     def test_invalid_request_image_reports_warning(self, client):
         resp = client.post("/convert", json={

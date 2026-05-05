@@ -6,6 +6,14 @@ Dockerfile.slim 通过 `COPY fonts/ /usr/share/fonts/truetype/custom/` 将此目
 
 `fonts-noto-cjk` 包提供 Noto Sans CJK SC / Noto Serif CJK SC，作为 CJK 字体的兜底 fallback。
 
+## 已内置的开源兜底字体
+
+| 文件名 | 字体名 | 用途 | 来源说明 |
+|--------|--------|------|---------|
+| `NotoSansCJKsc-Regular.otf` | Noto Sans CJK SC | 本地服务字体嵌入兜底 | Google / Noto Fonts，SIL Open Font License 1.1 |
+
+授权文本见 `OFL.txt`。
+
 ## 需手动放入此目录的字体
 
 | 文件名 | 字体名 | 被哪些样式使用 | 来源说明 |
@@ -26,7 +34,14 @@ Dockerfile.slim 通过 `COPY fonts/ /usr/share/fonts/truetype/custom/` 将此目
 
 ## macOS 本地开发说明
 
-直接在 macOS 上运行 uvicorn 时无需此目录中的字体文件。macOS 自带 Songti SC（宋体替代）、Heiti SC（黑体替代），但缺少仿宋、楷体和方正小标宋。使用 `official` 样式时相关字体会 fallback 到 Noto Sans CJK。
+直接在 macOS 上运行 uvicorn 时，服务会优先扫描本目录、系统字体目录以及 `MD_VIEWER_DOCX_FONT_PATHS` / `MD_VIEWER_DOCX_FONT_DIRS` 指定的字体。本目录内置的 Noto Sans CJK SC 用作稳定兜底。
+
+示例：
+
+```bash
+export MD_VIEWER_DOCX_FONT_PATHS="/path/to/custom.ttf:/path/to/another.ttc"
+export MD_VIEWER_DOCX_FONT_DIRS="/path/to/font-dir"
+```
 
 ## 许可证
 

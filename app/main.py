@@ -25,7 +25,7 @@ from app.generator import generate_docx_from_content
 from app.presets import VALID_STYLES, DOCX_PRESETS, STYLE_ORDER, NON_PREVIEW_BLOCK_STYLES
 from app.image_injector import preprocess_markdown, inject_images, ImageLayout
 from app.chart_renderers import render_charts_and_formulas_sync, rendered_images_to_base64
-from app.font_embedder import embed_fonts_if_requested, resolve_reference_docx
+from app.font_embedder import embed_fonts_if_requested, get_embeddable_font_paths, resolve_reference_docx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,20 +62,28 @@ def _detect_mode() -> str:
 def _get_available_fonts() -> list[str]:
     """检测系统可用的 CJK 字体"""
     import subprocess
-    fonts = []
+    fonts = set()
+    target_fonts = [
+        "Sarasa Mono SC", "Noto Sans CJK SC", "SimSun", "FangSong",
+        "KaiTi", "SimHei", "FZXiaoBiaoSong-B05S", "PingFang SC",
+        "Hiragino Sans GB", "Songti SC", "Heiti SC",
+    ]
     try:
         result = subprocess.run(
             ["fc-list", "--format=%{family}\n"],
             capture_output=True, text=True, timeout=5
         )
         all_fonts = set(result.stdout.strip().split("\n"))
-        for target in ["Sarasa Mono SC", "Noto Sans CJK SC", "SimSun", "FangSong",
-                        "KaiTi", "SimHei", "FZXiaoBiaoSong-B05S"]:
+        for target in target_fonts:
             if any(target.lower() in f.lower() for f in all_fonts):
-                fonts.append(target)
+                fonts.add(target)
     except Exception:
         pass
-    return fonts
+
+    for font_path in get_embeddable_font_paths():
+        if font_path.parent.name == "fonts" or any(target.lower().replace(" ", "") in font_path.stem.lower() for target in target_fonts):
+            fonts.add(font_path.stem)
+    return sorted(fonts)
 
 
 def _image_layout_for_style(style: str) -> ImageLayout | None:
@@ -102,7 +110,7 @@ class ConvertRequest(BaseModel):
     style: str = Field(default="standard", max_length=20)
     title: Optional[str] = Field(default=None, max_length=200)
     footerText: Optional[str] = Field(default="由 MD Viewer 生成", max_length=200)
-    images: list[ImageItem] = Field(default_factory=list, max_length=50)
+    images: list[ImageItem] = Field(default_factory=list)
     renderCharts: bool = Field(default=False)
     chartRenderers: list[str] = Field(default_factory=list)
     embedFont: bool = Field(default=False)
@@ -128,10 +136,10 @@ async def healthz():
         "mode": mode,
         "styles": list(STYLE_ORDER),
         "fontsAvailable": _get_available_fonts(),
-        "embedFontSupported": False,
+        "embedFontSupported": bool(get_embeddable_font_paths()),
         "chartRenderersAvailable": chart_renderers,
         "minClientVersion": MIN_CLIENT_VERSION,
-        "maxImagesPerRequest": 50,
+        "maxImagesPerRequest": None,
         "maxRequestSizeMb": 30,
     }
 

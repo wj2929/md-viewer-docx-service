@@ -17,6 +17,9 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 PLACEHOLDER_PATTERN = re.compile(r"^!\[\]\((mdv__chart__[0-9a-f]{8}__)\)$")
+PLACEHOLDER_IMAGE_MARKDOWN_PATTERN = re.compile(
+    r"!\[[^\]\n]*\]\(\s*(mdv__chart__[0-9a-f]{8}__)(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
+)
 IMAGE_MAX_PIXELS = 20_000_000
 IMAGE_MAX_B64_LEN = 2_800_000
 PREVIEW_IMAGE_MARGIN_CM = 0.45
@@ -71,9 +74,10 @@ def resolve_image_width_cm(width_cm: float, style: str = "standard", layout: Opt
 def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, ImageData]]:
     """预处理 markdown：验证图片数据，构建 id→ImageData 映射。
 
-    不修改 markdown 文本——占位符由客户端已经写入。
+    将带 alt 的图表占位符规范化为 ![](id)，避免 Markdown 行内解析把它当成普通链接。
     返回 (原始 md, {id: ImageData})
     """
+    md = PLACEHOLDER_IMAGE_MARKDOWN_PATTERN.sub(lambda m: f"![]({m.group(1)})", md)
     image_map: Dict[str, ImageData] = {}
     for img in images:
         try:

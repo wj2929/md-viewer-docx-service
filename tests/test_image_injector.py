@@ -80,6 +80,15 @@ class TestPreprocessMarkdown:
         assert result_md == md
         assert "mdv__chart__aabbccdd__" in image_map
 
+    def test_normalizes_alt_text_chart_placeholders(self, minimal_png_base64):
+        md = '# Title\n\n![基础流程](mdv__chart__aabbccdd__ "图表")'
+        images = [{"id": "mdv__chart__aabbccdd__", "pngBase64": minimal_png_base64}]
+
+        result_md, image_map = preprocess_markdown(md, images)
+
+        assert result_md == "# Title\n\n![](mdv__chart__aabbccdd__)"
+        assert "mdv__chart__aabbccdd__" in image_map
+
     def test_skips_invalid_images(self):
         md = "# Title"
         images = [{"id": "mdv__chart__bad00000__", "pngBase64": "not-valid"}]
