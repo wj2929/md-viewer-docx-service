@@ -1,7 +1,9 @@
 {
-  "name": "md-viewer-docx-service-renderers",
+  "name": "md-viewer-docx-service",
   "private": true,
   "version": "0.1.0",
+  "description": "DOCX export service for MD Viewer",
+  "license": "MIT",
   "dependencies": {
     "d3": "^7.9.0",
     "echarts": "^6.0.0",
