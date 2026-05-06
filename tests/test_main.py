@@ -1,4 +1,5 @@
 import os
+import json
 import pytest
 import zipfile
 import io
@@ -56,6 +57,42 @@ class TestHealthz:
         with patch("app.main.shutil.which", return_value=None):
             data = client.get("/healthz").json()
             assert "dot" not in data["chartRenderersAvailable"]
+
+
+class TestReadyz:
+    def test_readyz_reports_missing_renderer_artifact(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("MDV_RENDER_ARTIFACT_DIR", str(tmp_path / "missing"))
+
+        resp = client.get("/readyz")
+
+        assert resp.status_code == 503
+        assert resp.json()["rendererHealth"] == "missing"
+
+    def test_readyz_reports_renderer_artifact_fields(self, client, monkeypatch, tmp_path):
+        artifact_dir = tmp_path / "server-render"
+        assets_dir = artifact_dir / "assets"
+        assets_dir.mkdir(parents=True)
+        (artifact_dir / "server-render.html").write_text("<html></html>", encoding="utf-8")
+        (artifact_dir / "manifest.json").write_text(json.dumps({
+            "name": "@md-viewer/server-renderer",
+            "version": "1.0.0",
+            "schemaVersion": "1.0",
+            "entryHtml": "server-render.html",
+            "assetsDir": "assets",
+            "supportedCharts": ["mermaid"],
+            "minDocxServiceVersion": "0.1.0",
+        }), encoding="utf-8")
+        monkeypatch.setenv("MDV_RENDER_ARTIFACT_DIR", str(artifact_dir))
+
+        resp = client.get("/readyz")
+        data = resp.json()
+
+        assert resp.status_code == 200
+        assert data["fullFidelityRenderSupported"] is True
+        assert data["rendererHealth"] == "ok"
+        assert data["rendererArtifactVersion"] == "1.0.0"
+        assert data["rendererSchemaVersion"] == "1.0"
+        assert data["rendererSupportedCharts"] == ["mermaid"]
 
 
 class TestConvertPlainText:

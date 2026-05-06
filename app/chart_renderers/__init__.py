@@ -12,20 +12,27 @@ import shutil
 import subprocess
 import textwrap
 import tempfile
+import time
 import uuid
+import zlib
 from dataclasses import dataclass, field
 from typing import Iterable
 
 from PIL import Image, ImageDraw, ImageFont
 
 
-SUPPORTED_CHART_LANGS = {"mermaid", "echarts", "dot", "graphviz", "markmap", "plantuml"}
-FENCE_RE = re.compile(r"```([A-Za-z0-9_-]+)\n([\s\S]*?)```", re.MULTILINE)
+SUPPORTED_CHART_LANGS = {"mermaid", "echarts", "dot", "graphviz", "markmap", "plantuml", "puml"}
+CHART_LANG_ALIASES = {
+    "dot": "graphviz",
+    "puml": "plantuml",
+}
+FENCE_RE = re.compile(r"^```([A-Za-z0-9_-]+)[^\n]*\n([\s\S]*?)^```\s*$", re.MULTILINE)
 BLOCK_MATH_RE = re.compile(r"\$\$\n?([\s\S]*?)\n?\$\$", re.MULTILINE)
 INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+)\$(?!\$)")
 DOCX_IMAGE_MAX_PIXELS = 20_000_000
 DOCX_CHART_MAX_WIDTH_CM = 15.5
 DOCX_CHART_MAX_HEIGHT_CM = 24.0
+DOCX_CHART_WIDTH_CM_PER_PX = 0.018
 
 
 @dataclass
@@ -50,25 +57,26 @@ def render_charts_and_formulas_sync(
     if chart_renderers is None:
         enabled = set(SUPPORTED_CHART_LANGS)
     else:
-        enabled = {r.lower() for r in chart_renderers}
+        enabled = {_canonical_chart_lang(r.lower()) for r in chart_renderers}
 
     result = RenderResult(markdown=markdown)
 
     def replace_fence(match: re.Match[str]) -> str:
         lang = match.group(1).lower()
+        canonical_lang = _canonical_chart_lang(lang)
         code = match.group(2).strip("\n")
-        if lang not in SUPPORTED_CHART_LANGS or lang not in enabled:
+        if lang not in SUPPORTED_CHART_LANGS or canonical_lang not in enabled:
             return match.group(0)
 
         placeholder = _new_placeholder()
         try:
-            png = _render_chart_png(lang, code)
+            png = _render_chart_png(canonical_lang, code)
         except Exception as exc:
             png = _render_text_png(f"{lang}\n\n{code}", title=f"{lang} 渲染失败，已保留源码图")
             result.warnings.append(f"{lang} render fallback: {exc}")
 
         result.images[placeholder] = RenderedImage(id=placeholder, png_bytes=png)
-        return f"![]({placeholder})"
+        return f"\n\n![]({placeholder})\n\n"
 
     result.markdown = FENCE_RE.sub(replace_fence, result.markdown)
 
@@ -108,6 +116,10 @@ def render_charts_and_formulas_sync(
     return result
 
 
+def _canonical_chart_lang(lang: str) -> str:
+    return CHART_LANG_ALIASES.get(lang, lang)
+
+
 def _new_placeholder() -> str:
     return f"mdv__chart__{uuid.uuid4().hex[:8]}__"
 
@@ -117,6 +129,8 @@ def _render_chart_png(lang: str, code: str) -> bytes:
         return _render_dot_png(code)
     if lang in {"mermaid", "echarts", "markmap"}:
         return _render_browser_chart_png(lang, code)
+    if lang == "plantuml":
+        return _render_plantuml_png(code)
     return _render_text_png(code, title=f"{lang} 图表")
 
 
@@ -133,6 +147,90 @@ def _render_dot_png(code: str) -> bytes:
     if proc.returncode != 0 or not proc.stdout:
         raise RuntimeError(proc.stderr.decode("utf-8", errors="replace")[:300] or "dot failed")
     return proc.stdout
+
+
+PLANTUML_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
+
+
+def _append_plantuml_3bytes(data: list[str], b1: int, b2: int, b3: int) -> None:
+    c1 = b1 >> 2
+    c2 = ((b1 & 0x3) << 4) | (b2 >> 4)
+    c3 = ((b2 & 0xF) << 2) | (b3 >> 6)
+    c4 = b3 & 0x3F
+    data.extend([
+        PLANTUML_ALPHABET[c1 & 0x3F],
+        PLANTUML_ALPHABET[c2 & 0x3F],
+        PLANTUML_ALPHABET[c3 & 0x3F],
+        PLANTUML_ALPHABET[c4 & 0x3F],
+    ])
+
+
+def _encode_plantuml(code: str) -> str:
+    compressed = zlib.compress(code.encode("utf-8"), 9)[2:-4]
+    result: list[str] = []
+    for index in range(0, len(compressed), 3):
+        chunk = compressed[index:index + 3]
+        b1 = chunk[0]
+        b2 = chunk[1] if len(chunk) > 1 else 0
+        b3 = chunk[2] if len(chunk) > 2 else 0
+        _append_plantuml_3bytes(result, b1, b2, b3)
+    return "".join(result)
+
+
+def _normalize_plantuml_code(code: str) -> str:
+    normalized = code
+    if re.search(r"(?m)^\s*nwdiag\s*\{", normalized):
+        normalized = re.sub(r"(?m)^@startuml\s*$", "@startnwdiag", normalized, count=1)
+        normalized = re.sub(r"(?m)^@enduml\s*$", "@endnwdiag", normalized)
+
+    def expand_single_line_class(match: re.Match[str]) -> str:
+        name = match.group(1)
+        body = match.group(2).strip()
+        return f"class {name} {{\n  {body}\n}}"
+
+    normalized = re.sub(
+        r"(?m)^class\s+([A-Za-z_][\w.]*)\s*\{\s*([^{}\n]+?)\s*\}\s*$",
+        expand_single_line_class,
+        normalized,
+    )
+    return normalized
+
+
+def _render_plantuml_png(code: str) -> bytes:
+    import requests
+
+    server_url = os.environ.get("MDV_PLANTUML_SERVER_URL") or os.environ.get("PLANTUML_SERVER_URL") or "https://www.plantuml.com/plantuml"
+    server_url = server_url.rstrip("/")
+    code = _normalize_plantuml_code(code)
+    encoded = _encode_plantuml(code)
+    timeout = float(os.environ.get("MDV_PLANTUML_TIMEOUT_SEC", "12"))
+    retries = max(1, int(os.environ.get("MDV_PLANTUML_RETRIES", "3")))
+
+    last_error: Exception | None = None
+    for attempt in range(retries):
+        try:
+            if len(encoded) <= 4000:
+                response = requests.get(f"{server_url}/png/{encoded}", timeout=timeout)
+            else:
+                response = requests.post(
+                    f"{server_url}/png",
+                    data=code.encode("utf-8"),
+                    headers={"Content-Type": "text/plain; charset=utf-8"},
+                    timeout=timeout,
+                )
+            if response.content.startswith(b"\x89PNG\r\n\x1a\n"):
+                return response.content
+            if response.status_code != 200:
+                last_error = RuntimeError(f"PlantUML server returned {response.status_code}")
+            else:
+                last_error = RuntimeError("PlantUML server returned non-PNG content")
+        except Exception as exc:
+            last_error = exc
+
+        if attempt < retries - 1:
+            time.sleep(min(0.25 * (attempt + 1), 1.0))
+
+    raise RuntimeError(str(last_error) if last_error else "PlantUML render failed")
 
 
 def _render_browser_chart_png(lang: str, code: str) -> bytes:
@@ -418,7 +516,8 @@ def _docx_safe_chart_image(image: RenderedImage) -> RenderedImage:
         next_image = next_image.resize((width, height), resampling)
 
     ratio = height / width if width > 0 else 1
-    width_cm = min(image.width_cm, DOCX_CHART_MAX_WIDTH_CM, DOCX_CHART_MAX_HEIGHT_CM / ratio)
+    pixel_based_width_cm = width * DOCX_CHART_WIDTH_CM_PER_PX
+    width_cm = min(image.width_cm, DOCX_CHART_MAX_WIDTH_CM, pixel_based_width_cm, DOCX_CHART_MAX_HEIGHT_CM / ratio)
     width_cm = max(4.0, round(width_cm, 2))
 
     buf = io.BytesIO()

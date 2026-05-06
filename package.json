@@ -10,6 +10,7 @@
     "katex": "^0.16.45",
     "markmap-lib": "^0.18.12",
     "markmap-view": "^0.18.12",
-    "mermaid": "^11.12.2"
+    "mermaid": "^11.12.2",
+    "playwright": "^1.51.0"
   }
 }

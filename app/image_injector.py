@@ -91,7 +91,8 @@ def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, Ima
     将带 alt 的图表占位符规范化为 ![](id)，避免 Markdown 行内解析把它当成普通链接。
     返回 (原始 md, {id: ImageData})
     """
-    md = PLACEHOLDER_IMAGE_MARKDOWN_PATTERN.sub(lambda m: f"![]({m.group(1)})", md)
+    md = PLACEHOLDER_IMAGE_MARKDOWN_PATTERN.sub(lambda m: f"\n\n![]({m.group(1)})\n\n", md)
+    md = re.sub(r"\n{3,}", "\n\n", md).strip()
     image_map: Dict[str, ImageData] = {}
     for img in images:
         try:
@@ -128,6 +129,48 @@ def inject_images(
         text = para.text.strip()
         m = PLACEHOLDER_PATTERN.match(text)
         if not m:
+            original_text = para.text
+            inline_matches = list(PLACEHOLDER_IMAGE_MARKDOWN_PATTERN.finditer(original_text))
+            if not inline_matches:
+                continue
+
+            for run in para.runs:
+                run.clear()
+
+            cursor = 0
+            inserted_any = False
+            for match in inline_matches:
+                if match.start() > cursor:
+                    para.add_run(original_text[cursor:match.start()])
+
+                placeholder_id = match.group(1)
+                img_data = image_map.get(placeholder_id)
+                if img_data is None:
+                    para.add_run(match.group(0))
+                else:
+                    run = para.add_run()
+                    run.add_picture(
+                        io.BytesIO(img_data.png_bytes),
+                        width=Cm(resolve_image_width_cm(
+                            img_data.width_cm,
+                            style,
+                            layout,
+                            (img_data.pixel_width, img_data.pixel_height),
+                        )),
+                    )
+                    injected += 1
+                    inserted_any = True
+                    logger.info(f"[ImageInjector] Injected {placeholder_id} ({len(img_data.png_bytes)} bytes)")
+                cursor = match.end()
+
+            if cursor < len(original_text):
+                para.add_run(original_text[cursor:])
+
+            if inserted_any:
+                pf = para.paragraph_format
+                pf.line_spacing = None
+                pf.line_spacing_rule = None
+                pf.first_line_indent = None
             continue
 
         placeholder_id = m.group(1)

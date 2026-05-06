@@ -195,3 +195,13 @@ class TestImageWidth:
 
         assert round(resolve_image_width_cm(10.0, style="report", layout=layout, image_size=(1000, 3000)), 2) == 8.0
         assert round(resolve_image_width_cm(15.5, style="official", layout=layout, image_size=(1000, 2000)), 2) == 12.0
+
+    def test_preview_uses_height_budget_for_tall_chart_images(self):
+        from app.image_injector import resolve_image_width_cm
+        from app.main import _image_layout_for_style
+
+        layout = _image_layout_for_style("preview")
+
+        assert layout is not None
+        assert layout.max_width_cm == 19.0
+        assert round(resolve_image_width_cm(15.5, style="preview", layout=layout, image_size=(1000, 2000)), 2) == 7.4

@@ -131,6 +131,19 @@ def test_official_normal_quote_does_not_become_note(tmp_path):
     assert any("引用一段政策原文" in p.text for p in doc.paragraphs)
 
 
+def test_official_quote_uses_first_line_indent_not_left_indent(tmp_path):
+    out_path = tmp_path / "official-quote-indent.docx"
+    generate_docx_from_content(
+        content="# 标题\n\n> 来源：这是一段比较长的说明文字，用来模拟导出后可能换行的家长会来源信息。",
+        output_path=str(out_path),
+        style="official",
+    )
+
+    para = next(p for p in Document(out_path).paragraphs if p.text.startswith("来源："))
+    assert para.paragraph_format.left_indent is None
+    assert round(para.paragraph_format.first_line_indent.cm, 2) == 0.74
+
+
 def test_official_gfm_note_becomes_note_prefix(tmp_path):
     out_path = tmp_path / "official-gfm-note.docx"
     generate_docx_from_content(

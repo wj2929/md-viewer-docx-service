@@ -13,6 +13,13 @@ class TestParseInline:
         assert len(bold_runs) == 1
         assert bold_runs[0].text == "粗体"
 
+    def test_bold_inside_chinese_sentence(self):
+        runs = parse_inline("父母在京**务工就业证明**")
+        assert [(r.text, r.bold) for r in runs] == [
+            ("父母在京", False),
+            ("务工就业证明", True),
+        ]
+
     def test_italic(self):
         runs = parse_inline("*斜体* text")
         italic_runs = [r for r in runs if r.italic]
@@ -248,6 +255,20 @@ class TestGenerateDocx:
             xml = zf.read("word/document.xml").decode("utf-8")
         assert 'w:u w:val="none"' in xml
         assert 'w:u w:val="single"' not in xml
+
+    def test_official_lists_preserve_inline_bold_without_markers(self, tmp_path):
+        out_path = str(tmp_path / "official-list-bold.docx")
+        generate_docx_from_content(
+            content="# 标题\n\n1. 父母在京**务工就业证明**\n\n- 可直接进**一中实验班/清北班**",
+            output_path=out_path,
+            style="official",
+        )
+
+        doc = Document(out_path)
+        text = "\n".join(p.text for p in doc.paragraphs)
+        assert "**" not in text
+        assert any(run.text == "务工就业证明" and run.bold for p in doc.paragraphs for run in p.runs)
+        assert any(run.text == "一中实验班/清北班" and run.bold for p in doc.paragraphs for run in p.runs)
 
     def test_preview_preserves_horizontal_rule_before_heading(self, tmp_path):
         out_path = str(tmp_path / "preview-horizontal-rule.docx")

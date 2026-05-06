@@ -126,8 +126,8 @@ def parse_inline(text: str, ref_id_to_index: Optional[Dict[str, int]] = None) ->
         r"(\[(?:ref:)?(ref_\d+)(?:[^\]]*)\])"  # [ref_001] / [ref:ref_001] / [ref_006评论区]
         r"|(\[(\d{1,3})\])(?!\()"               # [6] 纯数字（排除 markdown 链接）
         r"|(\[([^\]]+)\]\(([^)]+)\))"           # [text](url) markdown 链接
-        r"|(?<!\w)(\*\*\*(.+?)\*\*\*)(?!\*)"         # ***bold italic***
-        r"|(?<!\w)(\*\*(.+?)\*\*)(?!\*)"          # **bold**
+        r"|(?<!\*)(\*\*\*(.+?)\*\*\*)(?!\*)"      # ***bold italic***
+        r"|(?<!\*)(\*\*(.+?)\*\*)(?!\*)"          # **bold**
         r"|(?<![*\w])(\*([^*]+?)\*)(?!\*)"         # *italic* (content must not contain *)
         r"|(`(.+?)`)"                           # `code`
     )
@@ -811,21 +811,27 @@ def _add_non_preview_callout(
 ):
     note_text = _extract_note_text(text)
     if block_style.callout.mode == "official":
-        para = doc.add_paragraph()
-        para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        para.paragraph_format.left_indent = Cm(0.74)
         display_text = f"{block_style.callout.note_prefix}{note_text}" if note_text is not None else text
-        _apply_runs(
-            para,
-            parse_inline(display_text, ref_id_to_index),
-            font_name=font_name,
-            font_size=body_size,
-            east_asia_font_name=east_asia_font_name,
-            code_font_name=mono_font,
-            code_east_asia_font_name=mono_east_asia_font,
-            link_underline=link_underline,
-        )
-        _set_paragraph_spacing(para, before=Pt(2), after=Pt(2))
+        lines = display_text.split("\n")
+        for line_index, line in enumerate(lines):
+            para = doc.add_paragraph()
+            para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            para.paragraph_format.first_line_indent = Cm(0.74)
+            _apply_runs(
+                para,
+                parse_inline(line, ref_id_to_index),
+                font_name=font_name,
+                font_size=body_size,
+                east_asia_font_name=east_asia_font_name,
+                code_font_name=mono_font,
+                code_east_asia_font_name=mono_east_asia_font,
+                link_underline=link_underline,
+            )
+            _set_paragraph_spacing(
+                para,
+                before=Pt(2 if line_index == 0 else 0),
+                after=Pt(2 if line_index == len(lines) - 1 else 0),
+            )
         return
 
     if note_text is not None:

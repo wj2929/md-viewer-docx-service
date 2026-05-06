@@ -36,6 +36,8 @@ RUN pip install --no-cache-dir -r requirements-full.txt \
     && python -m playwright install chromium
 
 COPY app/ ./app/
+COPY renderers/ ./renderers/
+COPY --from=chart-assets /usr/local/bin/node /usr/local/bin/node
 COPY --from=chart-assets /assets/node_modules ./node_modules
 
 EXPOSE 3000
