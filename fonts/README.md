@@ -1,33 +1,74 @@
-# Docker 镜像字体文件
+# Fonts
 
-Dockerfile.slim 通过 `COPY fonts/ /usr/share/fonts/truetype/custom/` 将此目录的字体安装到容器中。
+本目录用于存放 `md-viewer-docx-service` 在 Docker 镜像和本地开发中可扫描的字体文件。服务会用这些字体改善中文 DOCX 排版，并在调用方设置 `embedFont=true` 时尝试把可嵌入字体写入 DOCX。
 
-## 已通过 apt 自动安装的字体
+## 默认字体
 
-`fonts-noto-cjk` 包提供 Noto Sans CJK SC / Noto Serif CJK SC，作为 CJK 字体的兜底 fallback。
+Dockerfile.slim 和 Dockerfile.full 都会安装 Debian 的 `fonts-noto-cjk` 包，并执行：
 
-## 需手动放入此目录的字体
+```dockerfile
+COPY fonts/ /usr/share/fonts/truetype/custom/
+RUN fc-cache -fv
+```
 
-| 文件名 | 字体名 | 被哪些样式使用 | 来源说明 |
-|--------|--------|---------------|---------|
-| `msyh.ttc` | 微软雅黑 (Microsoft YaHei) | standard | Windows 系统字体 |
-| `simhei.ttf` | 黑体 (SimHei) | official, internal, report | Windows 系统字体 |
-| `simsun.ttc` | 宋体 (SimSun) | internal, report | Windows 系统字体 |
-| `simfang.ttf` | 仿宋_GB2312 (FangSong) | official | Windows 系统字体 |
-| `simkai.ttf` | 楷体_GB2312 (KaiTi) | official | Windows 系统字体 |
-| `FZXBSJW.TTF` | 方正小标宋简体 | official | 方正字库（公文排版常用） |
+当前仓库内置的开源兜底字体：
 
-## 各样式字体依赖
+| 文件名 | 字体名 | 用途 | 许可证 |
+|---|---|---|---|
+| `NotoSansCJKsc-Regular.otf` | Noto Sans CJK SC | 中文排版与字体嵌入兜底 | SIL Open Font License 1.1 |
 
-- **standard**：微软雅黑（正文 + 标题）
-- **official**（GB/T 9704 公文）：方正小标宋简体（标题）、仿宋_GB2312（正文）、黑体（一级标题）、楷体_GB2312（二级标题）
-- **internal**（机关内部）：黑体（标题）、宋体（正文）
-- **report**（调研报告）：黑体（标题）、宋体（正文）
+授权文本见 `OFL.txt`。第三方声明见仓库根目录 `NOTICE.md`。
 
-## macOS 本地开发说明
+## 字体扫描顺序
 
-直接在 macOS 上运行 uvicorn 时无需此目录中的字体文件。macOS 自带 Songti SC（宋体替代）、Heiti SC（黑体替代），但缺少仿宋、楷体和方正小标宋。使用 `official` 样式时相关字体会 fallback 到 Noto Sans CJK。
+服务会从以下来源查找 `.ttf`、`.otf`、`.ttc` 字体：
 
-## 许可证
+1. `MD_VIEWER_DOCX_FONT_PATHS` 指定的字体文件。
+2. 代码内置的候选字体路径。
+3. `MD_VIEWER_DOCX_FONT_DIRS` 指定的字体目录。
+4. 本目录、Docker 自定义字体目录、Linux Noto 字体目录、macOS 系统字体目录。
 
-Windows 系统字体受 Microsoft 许可证约束，仅可在合法授权的环境中使用。方正小标宋简体需遵循方正字库授权协议。请确保合规后再将字体文件放入此目录。
+环境变量支持冒号分隔，也兼容逗号分隔：
+
+```bash
+export MD_VIEWER_DOCX_FONT_PATHS="/path/to/custom.ttf:/path/to/another.ttc"
+export MD_VIEWER_DOCX_FONT_DIRS="/path/to/font-dir"
+```
+
+## 可选商业或系统字体
+
+如果部署环境有合法授权，可以把下列字体放入本目录，或通过 `MD_VIEWER_DOCX_FONT_PATHS` / `MD_VIEWER_DOCX_FONT_DIRS` 挂载给服务：
+
+| 文件名示例 | 字体名 | 常见用途 | 授权说明 |
+|---|---|---|---|
+| `msyh.ttc` | 微软雅黑 | `standard` 样式 | Windows 系统字体，需遵循 Microsoft 授权 |
+| `simhei.ttf` | 黑体 | `official`、`internal`、`report` 标题 | Windows 系统字体，需遵循 Microsoft 授权 |
+| `simsun.ttc` | 宋体 | `internal`、`report` 正文 | Windows 系统字体，需遵循 Microsoft 授权 |
+| `simfang.ttf` | 仿宋_GB2312 | `official` 正文 | Windows 系统字体，需遵循 Microsoft 授权 |
+| `simkai.ttf` | 楷体_GB2312 | `official` 二级标题 | Windows 系统字体，需遵循 Microsoft 授权 |
+| `FZXBSJW.TTF` | 方正小标宋简体 | 公文标题 | 需遵循方正字库授权 |
+
+不要把未确认授权的商业字体提交到开源仓库。推荐在私有部署环境中通过 Docker volume 或环境变量挂载。
+
+## Docker 挂载示例
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:3179:3000 \
+  -v /path/to/fonts:/opt/mdv-fonts:ro \
+  -e MD_VIEWER_DOCX_FONT_DIRS=/opt/mdv-fonts \
+  mdviewer/docx-service:latest
+```
+
+## 字体嵌入行为
+
+- 只有请求中设置 `embedFont=true` 时才会尝试嵌入字体。
+- 找不到可嵌入字体时，服务会保留字体名称并返回 warning，DOCX 仍会生成。
+- 字体是否能被 Word / WPS 正确识别，还受字体文件格式、Office 支持情况和字体授权位影响。
+- 服务当前采用保守策略：优先保证 DOCX 可打开，字体嵌入失败时降级并报告 warning。
+
+## 开源注意事项
+
+- 本目录可以提交开源授权明确的字体及其许可证文本。
+- 本目录不应提交 Windows 系统字体、商业字体、内部字体包或无法确认授权来源的字体。
+- 新增字体时请同步更新 `NOTICE.md` 和本 README。

@@ -1,0 +1,16 @@
+{
+  "name": "md-viewer-docx-service",
+  "private": true,
+  "version": "0.1.0",
+  "description": "DOCX export service for MD Viewer",
+  "license": "MIT",
+  "dependencies": {
+    "d3": "^7.9.0",
+    "echarts": "^6.0.0",
+    "katex": "^0.16.45",
+    "markmap-lib": "^0.18.12",
+    "markmap-view": "^0.18.12",
+    "mermaid": "^11.12.2",
+    "playwright": "^1.51.0"
+  }
+}

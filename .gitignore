@@ -1,11 +1,16 @@
 __pycache__/
+.pytest_cache/
+node_modules/
 *.pyc
 *.pyo
 .venv/
 venv/
 spike/venv/
 spike/output/
+spike/
+docs/superpowers/
 *.egg-info/
 dist/
 build/
+renderers/dist/
 .env

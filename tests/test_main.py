@@ -1,9 +1,15 @@
 import os
+import json
 import pytest
+import zipfile
+import io
+from pathlib import Path
+from PIL import Image
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.chart_renderers import RenderResult
 
 
 @pytest.fixture
@@ -22,6 +28,19 @@ class TestHealthz:
                      "minClientVersion", "maxImagesPerRequest"):
             assert key in data, f"Missing key: {key}"
 
+    def test_healthz_does_not_report_fixed_image_cap(self, client):
+        data = client.get("/healthz").json()
+        assert data["maxImagesPerRequest"] is None
+
+    def test_get_available_fonts_includes_env_font_files(self, tmp_path, monkeypatch):
+        from app.main import _get_available_fonts
+
+        font_path = tmp_path / "NotoSansCJKsc-Regular.otf"
+        font_path.write_bytes(b"fake-font-bytes")
+        monkeypatch.setenv("MD_VIEWER_DOCX_FONT_PATHS", str(font_path))
+
+        assert "NotoSansCJKsc-Regular" in _get_available_fonts()
+
     def test_status_is_ok(self, client):
         data = client.get("/healthz").json()
         assert data["status"] == "ok"
@@ -30,10 +49,50 @@ class TestHealthz:
         data = client.get("/healthz").json()
         assert "standard" in data["styles"]
 
+    def test_healthz_styles_are_ordered_and_include_preview(self, client):
+        data = client.get("/healthz").json()
+        assert data["styles"] == ["preview", "standard", "official", "internal", "report"]
+
     def test_dot_renderer_requires_dot_binary(self, client):
         with patch("app.main.shutil.which", return_value=None):
             data = client.get("/healthz").json()
             assert "dot" not in data["chartRenderersAvailable"]
+
+
+class TestReadyz:
+    def test_readyz_reports_missing_renderer_artifact(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("MDV_RENDER_ARTIFACT_DIR", str(tmp_path / "missing"))
+
+        resp = client.get("/readyz")
+
+        assert resp.status_code == 503
+        assert resp.json()["rendererHealth"] == "missing"
+
+    def test_readyz_reports_renderer_artifact_fields(self, client, monkeypatch, tmp_path):
+        artifact_dir = tmp_path / "server-render"
+        assets_dir = artifact_dir / "assets"
+        assets_dir.mkdir(parents=True)
+        (artifact_dir / "server-render.html").write_text("<html></html>", encoding="utf-8")
+        (artifact_dir / "manifest.json").write_text(json.dumps({
+            "name": "@md-viewer/server-renderer",
+            "version": "1.0.0",
+            "schemaVersion": "1.0",
+            "entryHtml": "server-render.html",
+            "assetsDir": "assets",
+            "supportedCharts": ["mermaid"],
+            "minDocxServiceVersion": "0.1.0",
+        }), encoding="utf-8")
+        monkeypatch.setenv("MDV_RENDER_ARTIFACT_DIR", str(artifact_dir))
+
+        resp = client.get("/readyz")
+        data = resp.json()
+
+        assert resp.status_code == 200
+        assert data["fullFidelityRenderSupported"] is True
+        assert data["rendererHealth"] == "ok"
+        assert data["rendererArtifactVersion"] == "1.0.0"
+        assert data["rendererSchemaVersion"] == "1.0"
+        assert data["rendererSupportedCharts"] == ["mermaid"]
 
 
 class TestConvertPlainText:
@@ -43,7 +102,7 @@ class TestConvertPlainText:
         assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         assert len(resp.content) > 0
 
-    @pytest.mark.parametrize("style", ["standard", "official", "internal", "report"])
+    @pytest.mark.parametrize("style", ["preview", "standard", "official", "internal", "report"])
     def test_all_styles(self, client, style):
         resp = client.post("/convert", json={
             "markdown": "# 测试\n\n正文内容。",
@@ -58,6 +117,29 @@ class TestConvertPlainText:
         })
         assert resp.status_code in (400, 422)
 
+    def test_invalid_style_returns_style_invalid(self, client):
+        resp = client.post("/convert", json={
+            "markdown": "# Test",
+            "style": "missing",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "STYLE_INVALID"
+
+    @pytest.mark.parametrize("style", ["standard", "official", "internal", "report"])
+    def test_non_preview_styles_convert_complex_markdown(self, client, style):
+        resp = client.post("/convert", json={
+            "markdown": (
+                "# 标题\n\n"
+                "| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+                "> **注意：** 说明内容\n\n"
+                "```bash\nkubectl get pods\n```"
+            ),
+            "style": style,
+        })
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        assert len(resp.content) > 10_000
+
     def test_response_headers(self, client):
         resp = client.post("/convert", json={"markdown": "# Test"})
         assert "x-service-version" in resp.headers
@@ -70,6 +152,18 @@ class TestConvertPlainText:
         })
         assert resp.status_code == 200
         assert "x-convert-warnings" in resp.headers
+
+    def test_null_footer_text_disables_generated_branding(self, client):
+        resp = client.post("/convert", json={
+            "markdown": "# 标题\n\n正文",
+            "style": "preview",
+            "footerText": None,
+        })
+
+        assert resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+            document_xml = z.read("word/document.xml").decode("utf-8")
+        assert "由 MD Viewer 生成" not in document_xml
 
 
 class TestConvertWithImages:
@@ -85,6 +179,71 @@ class TestConvertWithImages:
         assert resp.status_code == 200
         assert resp.headers.get("x-charts-rendered") == "1"
 
+    def test_with_client_images_still_attempts_server_render_for_remaining_supported_charts(self, client, small_png_base64):
+        markdown = "# Test\n\n![](mdv__chart__aabb0011__)\n\n```mermaid\nclassDiagram\n  A <|-- B\n```"
+        with patch("app.main.render_charts_and_formulas_sync") as render_mock:
+            render_mock.return_value = RenderResult(markdown=markdown)
+            resp = client.post("/convert", json={
+                "markdown": markdown,
+                "images": [{
+                    "id": "mdv__chart__aabb0011__",
+                    "pngBase64": small_png_base64,
+                    "widthCm": 15.5,
+                }],
+            })
+
+        assert resp.status_code == 200
+        assert render_mock.call_args.args[1] is None
+
+    def test_with_alt_text_image_placeholder_injects_image(self, client, small_png_base64):
+        resp = client.post("/convert", json={
+            "markdown": "# Test\n\n![基础流程](mdv__chart__aabb0011__)",
+            "images": [{
+                "id": "mdv__chart__aabb0011__",
+                "pngBase64": small_png_base64,
+                "widthCm": 15.5,
+            }],
+        })
+
+        assert resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+            media_entries = [name for name in z.namelist() if name.startswith("word/media/")]
+            document_xml = z.read("word/document.xml").decode("utf-8")
+        assert len(media_entries) == 1
+        assert "mdv__chart__aabb0011__" not in document_xml
+
+    def test_accepts_more_than_fifty_client_rendered_images(self, client, small_png_base64):
+        images = [
+            {
+                "id": f"mdv__chart__{index:08x}__",
+                "pngBase64": small_png_base64,
+                "widthCm": 15.5,
+            }
+            for index in range(51)
+        ]
+        markdown = "# Test\n\n" + "\n\n".join(f"![]({image['id']})" for image in images)
+
+        resp = client.post("/convert", json={
+            "markdown": markdown,
+            "images": images,
+        })
+
+        assert resp.status_code == 200
+        assert resp.headers.get("x-charts-rendered") == "51"
+
+    def test_invalid_request_image_reports_warning(self, client):
+        resp = client.post("/convert", json={
+            "markdown": "# Test\n\n![](mdv__chart__aabb0011__)",
+            "images": [{
+                "id": "mdv__chart__aabb0011__",
+                "pngBase64": "not-valid",
+                "widthCm": 15.5,
+            }],
+            "style": "report",
+        })
+        assert resp.status_code == 200
+        assert "failed validation" in resp.headers.get("x-convert-warnings", "")
+
 
 class TestRenderChartsSlimMode:
     def test_render_charts_returns_400_on_slim(self, client):
@@ -95,6 +254,34 @@ class TestRenderChartsSlimMode:
         # slim 模式没有 playwright，应返回 400 或 200+warning
         # 取决于实际检测逻辑
         assert resp.status_code in (200, 400)
+
+    def test_full_mode_render_charts_uses_real_browser_renderer(self, client):
+        pytest.importorskip("playwright.sync_api")
+        if not _has_browser_assets():
+            pytest.skip("browser chart renderer assets are not installed")
+
+        with patch("app.main._detect_mode", return_value="full"):
+            resp = client.post("/convert", json={
+                "markdown": "```echarts\n{ xAxis: { type: 'category', data: ['A', 'B'] }, yAxis: {}, series: [{ type: 'bar', data: [1, 2] }] }\n```",
+                "renderCharts": True,
+            })
+
+        assert resp.status_code == 200
+        assert resp.headers.get("x-service-mode") == "serverRendered"
+        assert "Playwright Sync API inside the asyncio loop" not in resp.headers.get("x-convert-warnings", "")
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+            image_name = next(n for n in z.namelist() if n.startswith("word/media/"))
+            image = Image.open(io.BytesIO(z.read(image_name)))
+        assert image.width == 2340
+
+
+def _has_browser_assets() -> bool:
+    here = Path(__file__).resolve()
+    roots = [
+        here.parents[1] / "node_modules",
+        here.parents[2] / "md-viewer" / "node_modules",
+    ]
+    return any((root / "echarts" / "dist" / "echarts.min.js").exists() for root in roots)
 
 
 class TestApiKey:
