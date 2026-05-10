@@ -20,6 +20,7 @@
 - 新增 slim / full 两类 Docker 镜像边界：slim 面向 MD Viewer 客户端预渲染导出，full 面向独立服务端完整渲染。
 - 新增多样式 DOCX 输出能力，覆盖 `preview`、`standard`、`official`、`internal`、`report`。
 - 新增 `NOTICE.md`、`SECURITY.md`、`.env.example`、CI 工作流、字体目录说明和 renderer 目录说明，补齐开源发布基础材料。
+- 新增 Docker Hub 发布工作流，可在手动触发或推送 `v*` tag 时构建并推送 full / slim 镜像。
 
 ### 改进
 

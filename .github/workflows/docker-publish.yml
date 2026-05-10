@@ -1,0 +1,178 @@
+name: Docker Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image version tag, for example 0.1.0"
+        required: true
+        default: "0.1.0"
+      renderer_ref:
+        description: "md-viewer git ref used to build the full renderer artifact"
+        required: true
+        default: "v2.0.0"
+      publish_latest:
+        description: "Also publish latest and slim tags"
+        required: true
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: md-viewer-docx-service
+  RENDERER_REPOSITORY: wj2929/md-viewer
+  DEFAULT_RENDERER_REF: ${{ vars.MDV_RENDERER_REF || 'v2.0.0' }}
+
+jobs:
+  docker:
+    name: Build and push ${{ matrix.variant }} image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: full
+            dockerfile: Dockerfile.full
+          - variant: slim
+            dockerfile: Dockerfile.slim
+
+    steps:
+      - name: Checkout service
+        uses: actions/checkout@v4
+        with:
+          path: service
+
+      - name: Resolve publish settings
+        id: settings
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RENDERER_REF: ${{ inputs.renderer_ref }}
+          INPUT_PUBLISH_LATEST: ${{ inputs.publish_latest }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOCKERHUB_USERNAME}" ]]; then
+            echo "DOCKERHUB_USERNAME secret is required." >&2
+            exit 1
+          fi
+
+          if [[ -z "${DOCKERHUB_TOKEN}" ]]; then
+            echo "DOCKERHUB_TOKEN secret is required." >&2
+            exit 1
+          fi
+
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${INPUT_VERSION}"
+            renderer_ref="${INPUT_RENDERER_REF}"
+            publish_latest="${INPUT_PUBLISH_LATEST}"
+          else
+            version="${REF_NAME#v}"
+            renderer_ref="${DEFAULT_RENDERER_REF}"
+            publish_latest="true"
+          fi
+
+          if [[ -z "${version}" ]]; then
+            echo "Image version is required." >&2
+            exit 1
+          fi
+
+          if [[ -z "${renderer_ref}" ]]; then
+            echo "Renderer ref is required." >&2
+            exit 1
+          fi
+
+          {
+            echo "image=${DOCKERHUB_USERNAME}/${IMAGE_NAME}"
+            echo "version=${version}"
+            echo "renderer_ref=${renderer_ref}"
+            echo "publish_latest=${publish_latest}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout MD Viewer renderer source
+        if: matrix.variant == 'full'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.RENDERER_REPOSITORY }}
+          ref: ${{ steps.settings.outputs.renderer_ref }}
+          path: md-viewer
+
+      - name: Set up Node.js for renderer
+        if: matrix.variant == 'full'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: md-viewer/package-lock.json
+
+      - name: Build MD Viewer renderer artifact
+        if: matrix.variant == 'full'
+        working-directory: md-viewer
+        run: |
+          npm ci
+          npm run build
+
+      - name: Sync renderer artifact into service context
+        if: matrix.variant == 'full'
+        working-directory: service
+        env:
+          MD_VIEWER_ROOT: ${{ github.workspace }}/md-viewer
+        run: scripts/sync-renderer-artifact.sh
+
+      - name: Compose Docker tags
+        id: tags
+        shell: bash
+        env:
+          IMAGE: ${{ steps.settings.outputs.image }}
+          VERSION: ${{ steps.settings.outputs.version }}
+          PUBLISH_LATEST: ${{ steps.settings.outputs.publish_latest }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+
+          tags=()
+          if [[ "${VARIANT}" == "full" ]]; then
+            tags+=("${IMAGE}:${VERSION}")
+            tags+=("${IMAGE}:${VERSION}-full")
+            if [[ "${PUBLISH_LATEST}" == "true" ]]; then
+              tags+=("${IMAGE}:latest")
+            fi
+          else
+            tags+=("${IMAGE}:${VERSION}-slim")
+            if [[ "${PUBLISH_LATEST}" == "true" ]]; then
+              tags+=("${IMAGE}:slim")
+            fi
+          fi
+
+          {
+            echo "tags<<EOF"
+            printf "%s\n" "${tags[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: service
+          file: service/${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}

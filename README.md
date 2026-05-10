@@ -17,18 +17,19 @@
 
 | 模式 | 镜像 | 适用场景 | 主要能力 |
 |---|---|---|---|
-| 客户端预渲染 | `mdviewer/docx-service:<version>-slim` | MD Viewer 桌面客户端、本地导出 | 客户端传 Markdown + PNG 图片，服务拼装 DOCX |
-| 轻量服务端渲染 | `mdviewer/docx-service:<version>-slim` | 普通 Markdown、少量服务端图表 | 支持 Graphviz `dot` 等轻量能力，具体以 `/healthz` 为准 |
-| 完整服务端渲染 | `mdviewer/docx-service:<version>-full` | 独立 Docker 服务、CI、后端集成 | 支持 `/convert-source`，用浏览器渲染图表/公式/Excalidraw 后导出 |
+| 客户端预渲染 | `wj2929/md-viewer-docx-service:<version>-slim` | MD Viewer 桌面客户端、本地导出 | 客户端传 Markdown + PNG 图片，服务拼装 DOCX |
+| 轻量服务端渲染 | `wj2929/md-viewer-docx-service:<version>-slim` | 普通 Markdown、少量服务端图表 | 支持 Graphviz `dot` 等轻量能力，具体以 `/healthz` 为准 |
+| 完整服务端渲染 | `wj2929/md-viewer-docx-service:<version>` | 独立 Docker 服务、CI、后端集成 | 支持 `/convert-source`，用浏览器渲染图表/公式/Excalidraw 后导出 |
 
 镜像标签约定：
 
 | 镜像 | 说明 |
 |---|---|
-| `mdviewer/docx-service:<version>-slim` | 轻量镜像，推荐给 MD Viewer 客户端 |
-| `mdviewer/docx-service:<version>-full` | 完整镜像，包含 Node、Playwright、Chromium；发布镜像应同时包含 renderer artifact |
-| `mdviewer/docx-service:<version>` | 默认指向 slim |
-| `mdviewer/docx-service:latest` | 最新稳定版 slim |
+| `wj2929/md-viewer-docx-service:<version>` | 完整镜像，包含 Node、Playwright、Chromium 和 renderer artifact |
+| `wj2929/md-viewer-docx-service:<version>-full` | 完整镜像的显式标签 |
+| `wj2929/md-viewer-docx-service:latest` | 最新稳定版完整镜像 |
+| `wj2929/md-viewer-docx-service:<version>-slim` | 轻量镜像，推荐给 MD Viewer 客户端预渲染场景 |
+| `wj2929/md-viewer-docx-service:slim` | 最新稳定版轻量镜像 |
 
 ## 快速启动
 
@@ -37,7 +38,7 @@
 ```bash
 docker run --rm --name md-viewer-docx-service \
   -p 127.0.0.1:3179:3000 \
-  mdviewer/docx-service:latest
+  wj2929/md-viewer-docx-service:latest
 ```
 
 MD Viewer 客户端服务地址填写：
@@ -443,11 +444,29 @@ DOCX 输出不是浏览器页面截图。图表、公式和画板类内容会尽
 
 ## Docker
 
+拉取预构建完整镜像：
+
+```bash
+docker run --rm --name md-viewer-docx-service \
+  -p 127.0.0.1:3179:3000 \
+  wj2929/md-viewer-docx-service:latest
+curl http://localhost:3179/readyz
+```
+
+拉取轻量镜像：
+
+```bash
+docker run --rm --name md-viewer-docx-service-slim \
+  -p 127.0.0.1:3179:3000 \
+  wj2929/md-viewer-docx-service:slim
+curl http://localhost:3179/healthz
+```
+
 构建 slim 镜像：
 
 ```bash
-docker build -t mdviewer/docx-service:dev-slim -f Dockerfile.slim .
-docker run --rm -p 127.0.0.1:3179:3000 mdviewer/docx-service:dev-slim
+docker build -t md-viewer-docx-service:dev-slim -f Dockerfile.slim .
+docker run --rm -p 127.0.0.1:3179:3000 md-viewer-docx-service:dev-slim
 curl http://localhost:3179/healthz
 ```
 
@@ -459,10 +478,12 @@ npm install
 npm run build
 cd ../md-viewer-docx-service
 scripts/sync-renderer-artifact.sh
-docker build -t mdviewer/docx-service:dev-full -f Dockerfile.full .
-docker run --rm -p 127.0.0.1:3180:3000 mdviewer/docx-service:dev-full
+docker build -t md-viewer-docx-service:dev-full -f Dockerfile.full .
+docker run --rm -p 127.0.0.1:3180:3000 md-viewer-docx-service:dev-full
 curl http://localhost:3180/readyz
 ```
+
+发布 Docker Hub 镜像由 GitHub Actions 的 `Docker Publish` 工作流完成。需要在仓库 Actions secrets 中配置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`，然后手动运行 workflow 或推送 `v*` tag。full 镜像默认使用 `md-viewer` 的 `v2.0.0` 构建 renderer artifact；如需调整，可在手动运行 workflow 时填写 `renderer_ref`，或配置仓库变量 `MDV_RENDERER_REF`。
 
 部署到局域网或公网时建议：
 
