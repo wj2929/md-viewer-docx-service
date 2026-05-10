@@ -104,7 +104,7 @@ DOCX_PRESETS = {
         },
         "body_font": "仿宋_GB2312", "body_size": 16,
         "line_spacing": 28,
-        "first_line_indent": 0.74,
+        "first_line_indent_chars": 2,
         "align": "justify",
     },
     # ── 机关内部文件 ──
@@ -121,7 +121,7 @@ DOCX_PRESETS = {
         },
         "body_font": "宋体", "body_size": 15,
         "line_spacing_multiple": 1.35,
-        "first_line_indent": 0.74,
+        "first_line_indent_chars": 2,
         "align": "justify",
     },
     # ── 调研/分析报告 ──
@@ -138,7 +138,7 @@ DOCX_PRESETS = {
         },
         "body_font": "宋体", "body_size": 12,
         "line_spacing_multiple": 1.3,
-        "first_line_indent": 0.56,
+        "first_line_indent_chars": 2,
         "align": "justify",
     },
 }

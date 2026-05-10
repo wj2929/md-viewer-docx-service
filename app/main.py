@@ -46,7 +46,8 @@ KATEX_MIN_WIDTH_CM = 2.8
 KATEX_MAX_WIDTH_CM = 10.5
 CHART_WIDTH_CM_PER_CSS_PX = 0.018
 CHART_MIN_WIDTH_CM = 2.8
-CHART_MAX_WIDTH_CM = 14.2
+CHART_MAX_WIDTH_CM = 15.5
+DEFAULT_RENDERER_CHART_WIDTH_CM = 15.5
 
 API_KEY = os.environ.get("API_KEY", "")
 RATE_LIMIT = os.environ.get("RATE_LIMIT_PER_MIN", "30")
@@ -179,6 +180,10 @@ def _resolve_full_fidelity_width_cm(image) -> float:
 
     if image_type == "katex":
         return min(KATEX_MAX_WIDTH_CM, max(KATEX_MIN_WIDTH_CM, round(width_px * KATEX_WIDTH_CM_PER_CSS_PX, 2)))
+    if 0 < fallback_width_cm < DEFAULT_RENDERER_CHART_WIDTH_CM:
+        return min(CHART_MAX_WIDTH_CM, max(CHART_MIN_WIDTH_CM, round(fallback_width_cm, 2)))
+    if image_type in {"echarts", "drawio", "graphviz"}:
+        return CHART_MAX_WIDTH_CM
     return min(CHART_MAX_WIDTH_CM, max(CHART_MIN_WIDTH_CM, round(width_px * CHART_WIDTH_CM_PER_CSS_PX, 2)))
 
 
@@ -394,7 +399,7 @@ async def convert(req: ConvertRequest, request: Request):
             tmp_path,
             style=req.style,
             title=req.title,
-            footer_text=req.footerText or "由 MD Viewer 生成",
+            footer_text=req.footerText,
             references=None,
             reference_docx_path=reference_docx_path,
         )
@@ -483,7 +488,7 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
             tmp_path,
             style=req.style,
             title=None,
-            footer_text="由 MD Viewer 生成",
+            footer_text=req.footerText,
             references=None,
             reference_docx_path=reference_docx_path,
         )

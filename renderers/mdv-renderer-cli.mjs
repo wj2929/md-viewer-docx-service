@@ -17,6 +17,15 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2',
 }
 
+const DEFAULT_VIEWPORT_WIDTH = 656
+const DEFAULT_VIEWPORT_HEIGHT = 1200
+
+function readPositiveInteger(value, fallback) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.round(parsed)
+}
+
 function readStdin() {
   return new Promise((resolve, reject) => {
     let data = ''
@@ -178,8 +187,10 @@ async function main() {
     server = served.server
 
     browser = await chromium.launch({ headless: true })
+    const viewportWidth = readPositiveInteger(input.viewportWidthPx || process.env.MDV_RENDER_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_WIDTH)
+    const viewportHeight = readPositiveInteger(input.viewportHeightPx || process.env.MDV_RENDER_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_HEIGHT)
     const context = await browser.newContext({
-      viewport: { width: 1440, height: 1200 },
+      viewport: { width: viewportWidth, height: viewportHeight },
       deviceScaleFactor: 3,
     })
 

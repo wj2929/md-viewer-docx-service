@@ -66,6 +66,29 @@ def test_non_preview_headings_disable_word_keep_constraints(tmp_path):
             assert keep_lines == ["0"]
 
 
+def test_document_body_first_line_indent_matches_style_contract(tmp_path):
+    expected_indent_pt = {
+        "preview": None,
+        "standard": None,
+        "official": 32.0,
+        "internal": 30.0,
+        "report": 24.0,
+    }
+    for style, expected_pt in expected_indent_pt.items():
+        out_path = tmp_path / f"{style}-body-indent.docx"
+        generate_docx_from_content(
+            content="# 标题\n\n这是一段普通正文，用于检查不同 DOCX 格式的首行缩进契约。",
+            output_path=str(out_path),
+            style=style,
+        )
+
+        para = next(p for p in Document(out_path).paragraphs if p.text.startswith("这是一段普通正文"))
+        if expected_pt is None:
+            assert para.paragraph_format.first_line_indent is None
+        else:
+            assert round(para.paragraph_format.first_line_indent.pt, 2) == expected_pt
+
+
 def test_non_preview_image_layout_caps_page_height():
     from app.main import _image_layout_for_style
 
@@ -141,7 +164,55 @@ def test_official_quote_uses_first_line_indent_not_left_indent(tmp_path):
 
     para = next(p for p in Document(out_path).paragraphs if p.text.startswith("来源："))
     assert para.paragraph_format.left_indent is None
-    assert round(para.paragraph_format.first_line_indent.cm, 2) == 0.74
+    assert round(para.paragraph_format.first_line_indent.pt, 2) == 32.0
+
+
+def test_official_quote_lead_in_before_list_uses_first_line_indent(tmp_path):
+    out_path = tmp_path / "official-quote-list-lead-in-indent.docx"
+    generate_docx_from_content(
+        content="# 标题\n\n> **结论**：如需按分部/频道分析连麦使用情况，只能通过以下方式：\n> 1. 第一种方式\n> 2. 第二种方式",
+        output_path=str(out_path),
+        style="official",
+    )
+
+    para = next(p for p in Document(out_path).paragraphs if p.text.startswith("结论："))
+    assert para.paragraph_format.left_indent is None
+    assert round(para.paragraph_format.first_line_indent.pt, 2) == 32.0
+
+
+def test_official_quote_list_items_use_hanging_indent(tmp_path):
+    out_path = tmp_path / "official-quote-list-indent.docx"
+    generate_docx_from_content(
+        content="# 标题\n\n> **说明**：\n> - 第一项说明\n> - 第二项说明",
+        output_path=str(out_path),
+        style="official",
+    )
+
+    doc = Document(out_path)
+    first_item = next(p for p in doc.paragraphs if "第一项说明" in p.text)
+    assert not first_item.text.strip().startswith("-")
+    assert first_item.text.strip().startswith("•\t")
+    assert round(first_item.paragraph_format.left_indent.cm, 2) == 1.2
+    assert round(first_item.paragraph_format.first_line_indent.cm, 2) == -0.5
+    assert [round(tab.position.cm, 2) for tab in first_item.paragraph_format.tab_stops] == [1.2]
+
+
+def test_official_quote_ordered_list_items_use_hanging_indent(tmp_path):
+    out_path = tmp_path / "official-quote-ordered-list-indent.docx"
+    generate_docx_from_content(
+        content="# 标题\n\n> **建议**：\n> 1. 第一项建议\n> 2. 第二项建议",
+        output_path=str(out_path),
+        style="official",
+    )
+
+    doc = Document(out_path)
+    first_item = next(p for p in doc.paragraphs if "第一项建议" in p.text)
+    second_item = next(p for p in doc.paragraphs if "第二项建议" in p.text)
+    assert first_item.text.strip().startswith("1.\t")
+    assert second_item.text.strip().startswith("2.\t")
+    assert round(first_item.paragraph_format.left_indent.cm, 2) == 1.2
+    assert round(first_item.paragraph_format.first_line_indent.cm, 2) == -0.5
+    assert [round(tab.position.cm, 2) for tab in first_item.paragraph_format.tab_stops] == [1.2]
 
 
 def test_official_gfm_note_becomes_note_prefix(tmp_path):

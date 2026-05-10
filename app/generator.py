@@ -14,6 +14,7 @@ Markdown 解析策略：使用正则逐行解析，避免引入额外依赖。
 import re
 import logging
 import subprocess
+import html
 from typing import List, Optional, Dict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -113,6 +114,16 @@ _RE_NOTE_PREFIX = re.compile(r"^\s*(?:\*\*)?\s*(注意|说明|注|Note|Warning)\
 _RE_GFM_ALERT = re.compile(r"^\s*\[!(NOTE|WARNING|TIP|IMPORTANT)\]\s*", re.IGNORECASE)
 
 
+def _decode_markdown_text(text: str) -> str:
+    """解码 Markdown 普通文本中的 HTML 实体；代码文本会绕过此函数。"""
+    return html.unescape(text).replace("\xa0", " ")
+
+
+def _first_line_indent_for_chars(font_size: Pt, chars: float = 2.0) -> Pt:
+    """按当前字号计算首行缩进，公文里的“两字缩进”应随正文字号变化。"""
+    return Pt(font_size.pt * chars)
+
+
 def parse_inline(text: str, ref_id_to_index: Optional[Dict[str, int]] = None) -> List[TextRun]:
     """解析行内格式：**bold**, *italic*, `code`, [ref_XXX] 引用角标
 
@@ -134,7 +145,7 @@ def parse_inline(text: str, ref_id_to_index: Optional[Dict[str, int]] = None) ->
     pos = 0
     for m in pattern.finditer(text):
         if m.start() > pos:
-            runs.append(TextRun(text=text[pos:m.start()]))
+            runs.append(TextRun(text=_decode_markdown_text(text[pos:m.start()])))
 
         if m.group(2):  # [ref_XXX] 格式
             ref_id = m.group(2)
@@ -152,21 +163,21 @@ def parse_inline(text: str, ref_id_to_index: Optional[Dict[str, int]] = None) ->
             else:
                 runs.append(TextRun(text=m.group(3)))
         elif m.group(5):  # [text](url) markdown 链接
-            runs.append(TextRun(text=m.group(6), link=m.group(7)))
+            runs.append(TextRun(text=_decode_markdown_text(m.group(6)), link=m.group(7)))
         elif m.group(9):  # bold italic
-            runs.append(TextRun(text=m.group(9), bold=True, italic=True))
+            runs.append(TextRun(text=_decode_markdown_text(m.group(9)), bold=True, italic=True))
         elif m.group(11):  # bold
-            runs.append(TextRun(text=m.group(11), bold=True))
+            runs.append(TextRun(text=_decode_markdown_text(m.group(11)), bold=True))
         elif m.group(13):  # italic
-            runs.append(TextRun(text=m.group(13), italic=True))
+            runs.append(TextRun(text=_decode_markdown_text(m.group(13)), italic=True))
         elif m.group(15):  # code
             runs.append(TextRun(text=m.group(15), code=True))
         pos = m.end()
 
     if pos < len(text):
-        runs.append(TextRun(text=text[pos:]))
+        runs.append(TextRun(text=_decode_markdown_text(text[pos:])))
 
-    return runs or [TextRun(text=text)]
+    return runs or [TextRun(text=_decode_markdown_text(text))]
 
 
 def parse_markdown(md_text: str, ref_id_to_index: Optional[Dict[str, int]] = None) -> List[Block]:
@@ -512,6 +523,7 @@ def _preview_text_width_score(text: str) -> float:
 
 
 def _preview_plain_cell_text(text: str) -> str:
+    text = _decode_markdown_text(text)
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     return text.replace("**", "").replace("***", "").replace("*", "")
@@ -632,7 +644,7 @@ def _add_table(
                         _set_cell_shading(cell, "F6F8FA")
                 # 表头行：整行加粗
                 if i == 0:
-                    run = p.add_run(cell_text)
+                    run = p.add_run(_decode_markdown_text(cell_text))
                     _set_run_fonts(run, font_name, east_asia_font_name)
                     run.font.size = Pt(8.5) if mode == "preview" else font_size
                     run.bold = True
@@ -706,7 +718,7 @@ def _add_styled_table(
             font_size = Pt(table_style.header_font_size if i == 0 else table_style.body_font_size)
 
             if i == 0:
-                run = paragraph.add_run(cell_text)
+                run = paragraph.add_run(_decode_markdown_text(cell_text))
                 _set_run_fonts(run, font_name, east_asia_font_name)
                 run.font.size = font_size
                 run.bold = True
@@ -813,10 +825,25 @@ def _add_non_preview_callout(
     if block_style.callout.mode == "official":
         display_text = f"{block_style.callout.note_prefix}{note_text}" if note_text is not None else text
         lines = display_text.split("\n")
+        ordered_counter = 0
         for line_index, line in enumerate(lines):
+            ul_match = _RE_UL.match(line)
+            ol_match = _RE_OL.match(line)
             para = doc.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            para.paragraph_format.first_line_indent = Cm(0.74)
+            if ul_match or ol_match:
+                para.paragraph_format.left_indent = Cm(1.2)
+                para.paragraph_format.first_line_indent = -Cm(0.5)
+                para.paragraph_format.tab_stops.add_tab_stop(Cm(1.2))
+                if ol_match:
+                    ordered_counter += 1
+                marker = "\u2022\t" if ul_match else f"{ordered_counter}.\t"
+                marker_run = para.add_run(marker)
+                _set_run_fonts(marker_run, font_name, east_asia_font_name)
+                marker_run.font.size = body_size
+                line = (ul_match or ol_match).group(2)
+            else:
+                para.paragraph_format.first_line_indent = _first_line_indent_for_chars(body_size)
             _apply_runs(
                 para,
                 parse_inline(line, ref_id_to_index),
@@ -923,7 +950,7 @@ def generate_standard_docx(
     title: str,
     messages: List[MessageDTO],
     output_path: str,
-    footer_text: str = "由终身教育智能体生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成",
 ):
     """
     通用格式 Word 导出
@@ -975,14 +1002,15 @@ def generate_standard_docx(
         _render_blocks(doc, blocks, font_name="宋体", body_size=Pt(12))
 
     # 页脚
-    doc.add_paragraph("")
-    footer_para = doc.add_paragraph()
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer_run = footer_para.add_run(footer_text)
-    footer_run.font.name = "宋体"
-    footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-    footer_run.font.size = Pt(9)
-    footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    if footer_text:
+        doc.add_paragraph("")
+        footer_para = doc.add_paragraph()
+        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer_run = footer_para.add_run(footer_text)
+        footer_run.font.name = "宋体"
+        footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+        footer_run.font.size = Pt(9)
+        footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
     doc.save(output_path)
     logger.info(f"[DocxExport] 标准格式导出完成: {output_path}")
@@ -992,7 +1020,7 @@ def generate_official_docx(
     title: str,
     messages: List[MessageDTO],
     output_path: str,
-    footer_text: str = "由终身教育智能体生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成",
 ):
     """
     行政公文标准格式 Word 导出（GB/T 9704-2012 近似）
@@ -1042,19 +1070,20 @@ def generate_official_docx(
             body_size=Pt(16),
             heading_font="黑体",
             line_spacing=Pt(28),
-            first_line_indent=Cm(0.74),  # 两字符缩进
+            first_line_indent=_first_line_indent_for_chars(Pt(16)),
             align=WD_ALIGN_PARAGRAPH.JUSTIFY,
         )
 
     # 页脚
-    doc.add_paragraph("")
-    footer_para = doc.add_paragraph()
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer_run = footer_para.add_run(footer_text)
-    footer_run.font.name = "宋体"
-    footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-    footer_run.font.size = Pt(9)
-    footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    if footer_text:
+        doc.add_paragraph("")
+        footer_para = doc.add_paragraph()
+        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer_run = footer_para.add_run(footer_text)
+        footer_run.font.name = "宋体"
+        footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+        footer_run.font.size = Pt(9)
+        footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
     doc.save(output_path)
     logger.info(f"[DocxExport] 公文格式导出完成: {output_path}")
@@ -1444,7 +1473,7 @@ def generate_docx_from_content(
     *,
     style: str = "standard",
     title: str = None,
-    footer_text: str = "由终身教育智能体生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成",
     references: Optional[List[dict]] = None,
     reference_docx_path: Optional[str] = None,
 ):
@@ -1534,7 +1563,10 @@ def generate_docx_from_content(
     # 正文渲染参数
     body_font = preset["body_font"]
     body_size = Pt(preset["body_size"])
-    first_indent = Cm(preset["first_line_indent"]) if preset.get("first_line_indent") else None
+    if preset.get("first_line_indent_chars"):
+        first_indent = _first_line_indent_for_chars(body_size, preset["first_line_indent_chars"])
+    else:
+        first_indent = Cm(preset["first_line_indent"]) if preset.get("first_line_indent") else None
     align_map = {"justify": WD_ALIGN_PARAGRAPH.JUSTIFY, "left": WD_ALIGN_PARAGRAPH.LEFT}
     align_val = align_map.get(preset.get("align", "justify"), WD_ALIGN_PARAGRAPH.JUSTIFY)
 
@@ -1583,14 +1615,15 @@ def generate_docx_from_content(
         )
 
     # 页脚
-    doc.add_paragraph("")
-    footer_para = doc.add_paragraph()
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer_run = footer_para.add_run(footer_text)
-    footer_run.font.name = "宋体"
-    footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-    footer_run.font.size = Pt(9)
-    footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    if footer_text:
+        doc.add_paragraph("")
+        footer_para = doc.add_paragraph()
+        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer_run = footer_para.add_run(footer_text)
+        footer_run.font.name = "宋体"
+        footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+        footer_run.font.size = Pt(9)
+        footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
     doc.save(output_path)
     logger.info(f"[DocxExport] {style} 格式导出完成: {output_path}")
@@ -1600,7 +1633,7 @@ def _generate_preview_from_content(
     content: str,
     output_path: str,
     title: str = None,
-    footer_text: str = "由 MD Viewer 生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成",
     references: Optional[List[dict]] = None,
     ref_id_to_index: Optional[Dict[str, int]] = None,
     reference_docx_path: Optional[str] = None,
@@ -1697,7 +1730,7 @@ def _generate_standard_from_content(
     content: str,
     output_path: str,
     title: str = None,
-    footer_text: str = "由终身教育智能体生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成",
     references: Optional[List[dict]] = None,
     ref_id_to_index: Optional[Dict[str, int]] = None,
     reference_docx_path: Optional[str] = None,

@@ -31,6 +31,7 @@ class ConvertSourceRequest(BaseModel):
     fallbackMode: Literal["partial", "fail"] = "partial"
     theme: Literal["light", "dark"] = "light"
     embedFont: bool = False
+    footerText: Optional[str] = Field(default="由 MD Viewer 生成", max_length=200)
     debugManifest: bool = False
     clientVersion: Optional[str] = Field(default=None, max_length=20)
     referenceDocxBase64: Optional[str] = Field(default=None, max_length=20_000_000)

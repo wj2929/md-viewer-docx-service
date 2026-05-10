@@ -153,6 +153,18 @@ class TestConvertPlainText:
         assert resp.status_code == 200
         assert "x-convert-warnings" in resp.headers
 
+    def test_null_footer_text_disables_generated_branding(self, client):
+        resp = client.post("/convert", json={
+            "markdown": "# 标题\n\n正文",
+            "style": "preview",
+            "footerText": None,
+        })
+
+        assert resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+            document_xml = z.read("word/document.xml").decode("utf-8")
+        assert "由 MD Viewer 生成" not in document_xml
+
 
 class TestConvertWithImages:
     def test_with_valid_image(self, client, small_png_base64):

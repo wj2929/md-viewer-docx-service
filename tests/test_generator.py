@@ -45,6 +45,20 @@ class TestParseInline:
         assert runs[0].text == "纯文本内容"
         assert not runs[0].bold and not runs[0].italic and not runs[0].code
 
+    def test_decodes_html_entities_in_text_runs(self):
+        runs = parse_inline("统计周期&nbsp;&nbsp;|&nbsp;&nbsp;数据来源 &amp; 说明")
+
+        assert "".join(run.text for run in runs) == "统计周期  |  数据来源 & 说明"
+
+    def test_keeps_html_entities_literal_inside_code_spans(self):
+        runs = parse_inline("使用 `&nbsp;` 表示空格")
+
+        assert [(run.text, run.code) for run in runs] == [
+            ("使用 ", False),
+            ("&nbsp;", True),
+            (" 表示空格", False),
+        ]
+
 
 class TestParseMarkdown:
     def test_heading(self):
@@ -95,6 +109,21 @@ class TestGenerateDocx:
         assert os.path.exists(out_path)
         assert os.path.getsize(out_path) > 0
 
+    @pytest.mark.parametrize("style", ["preview", "standard", "official", "internal", "report"])
+    def test_none_footer_text_omits_generated_branding(self, tmp_path, style):
+        out_path = str(tmp_path / f"no-footer-{style}.docx")
+        generate_docx_from_content(
+            content="# 标题\n\n正文",
+            output_path=out_path,
+            style=style,
+            footer_text=None,
+        )
+
+        with zipfile.ZipFile(out_path) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+
+        assert "由 MD Viewer 生成" not in xml
+
     def test_preview_uses_a4_and_narrow_margins(self, tmp_path):
         out_path = str(tmp_path / "preview.docx")
         generate_docx_from_content(
@@ -133,6 +162,19 @@ class TestGenerateDocx:
             xml = zf.read("word/document.xml").decode("utf-8")
         assert 'w:fill="F6F8FA"' in xml
         assert "w:tcMar" in xml
+
+    def test_docx_output_decodes_html_entities_in_blockquote(self, tmp_path):
+        out_path = str(tmp_path / "html-entities.docx")
+        generate_docx_from_content(
+            content="> **统计周期**：2021年3月 — 2026年5月 &nbsp;&nbsp;|&nbsp;&nbsp; **数据来源**：开放 API",
+            output_path=out_path,
+            style="official",
+        )
+
+        with zipfile.ZipFile(out_path) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+        assert "&amp;nbsp;" not in xml
+        assert "2026年5月   |   " in xml
 
     def test_preview_table_cell_metrics_match_print_density(self, tmp_path):
         out_path = str(tmp_path / "preview-table-metrics.docx")

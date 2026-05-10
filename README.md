@@ -201,7 +201,7 @@ X-API-Key: your-api-key
 | `markdown` | string | 是 | - | Markdown 正文，长度 1 到 500000 字符 |
 | `style` | string | 否 | `standard` | DOCX 样式，支持 `preview`、`standard`、`official`、`internal`、`report` |
 | `title` | string \| null | 否 | `null` | 文档标题，最长 200 字符 |
-| `footerText` | string \| null | 否 | `由 MD Viewer 生成` | 页脚文本，最长 200 字符 |
+| `footerText` | string \| null | 否 | `由 MD Viewer 生成` | 页脚文本，最长 200 字符；传 `null` 或空字符串时不显示页脚署名 |
 | `images` | array | 否 | `[]` | 客户端预渲染图片列表 |
 | `renderCharts` | boolean | 否 | `false` | 是否由服务端渲染图表；完整能力建议使用 `/convert-source` |
 | `chartRenderers` | string[] | 否 | `[]` | 限定服务端图表渲染器，例如 `["mermaid", "dot"]` |
@@ -295,6 +295,7 @@ curl -X POST http://localhost:3179/convert \
 | `fallbackMode` | `partial` \| `fail` | 否 | `partial` | 渲染失败时部分导出还是直接失败 |
 | `theme` | `light` \| `dark` | 否 | `light` | 预留主题字段 |
 | `embedFont` | boolean | 否 | `false` | 是否尝试嵌入字体 |
+| `footerText` | string \| null | 否 | `由 MD Viewer 生成` | 页脚文本，传 `null` 或空字符串时不显示页脚署名 |
 | `debugManifest` | boolean | 否 | `false` | 预留调试字段，生产环境通常保持 `false` |
 | `clientVersion` | string \| null | 否 | `null` | 客户端版本，最长 20 字符 |
 | `referenceDocxBase64` | string \| null | 否 | `null` | 自定义参考 DOCX 模板，base64 最大 20000000 字符 |

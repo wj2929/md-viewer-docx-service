@@ -46,6 +46,38 @@ def test_convert_source_markdown_returns_docx(client, monkeypatch, tmp_path):
     assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
+def test_convert_source_null_footer_text_disables_generated_branding(client, monkeypatch):
+    from app import main
+
+    class FakeSummary:
+        failedBlocks = 0
+
+        def model_dump(self):
+            return {"failedBlocks": 0}
+
+    class FakeResult:
+        ok = True
+        status = "success"
+        warnings = []
+        images = []
+        stats = {"totalBlocks": 1, "renderedBlocks": 1, "failedBlocks": 0, "durationMs": 10}
+        renderSummary = FakeSummary()
+
+    monkeypatch.setattr(main, "render_markdown_full_fidelity", lambda **kwargs: FakeResult())
+
+    resp = client.post("/convert-source", json={
+        "sourceType": "markdown",
+        "markdown": "# 标题\n\n正文",
+        "style": "preview",
+        "footerText": None,
+    })
+
+    assert resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+        document_xml = z.read("word/document.xml").decode("utf-8")
+    assert "由 MD Viewer 生成" not in document_xml
+
+
 def test_convert_source_injects_full_fidelity_renderer_images(client, monkeypatch, tmp_path, small_png_base64):
     from app import main
 
@@ -194,7 +226,27 @@ def test_full_fidelity_chart_width_follows_rendered_pixel_width(tmp_path, small_
     result = _full_fidelity_images_to_base64([NarrowMermaid(), WideEcharts()])
 
     assert 5.5 <= result[0]["widthCm"] <= 7.0
-    assert result[1]["widthCm"] == 14.2
+    assert result[1]["widthCm"] == 15.5
+
+
+def test_full_fidelity_chart_width_prefers_renderer_physical_width(tmp_path, small_png_base64):
+    import base64
+    from app.main import _full_fidelity_images_to_base64
+
+    png_path = tmp_path / "chart.png"
+    png_path.write_bytes(base64.b64decode(small_png_base64))
+
+    class RendererSizedChart:
+        id = "mdv__chart__00000000__"
+        type = "graphviz"
+        pngPath = str(png_path)
+        widthPx = 556
+        heightPx = 419
+        widthCm = 13.1
+
+    result = _full_fidelity_images_to_base64([RendererSizedChart()])
+
+    assert result[0]["widthCm"] == 13.1
 
 
 def test_convert_source_injects_full_fidelity_excalidraw_file_images(client, monkeypatch, tmp_path, small_png_base64):
