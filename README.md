@@ -506,6 +506,7 @@ PYTHONPATH=. pytest -q
 ## 开源说明
 
 - 主许可证：`LICENSE`
+- 变更记录：`CHANGELOG.md`
 - 第三方依赖和字体声明：`NOTICE.md`
 - 安全反馈和部署建议：`SECURITY.md`
 - 字体目录说明：`fonts/README.md`
