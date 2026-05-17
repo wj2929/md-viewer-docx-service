@@ -86,14 +86,14 @@ DOCX_PRESETS = {
         "align": "left",
         "content_width_cm": 19.0,
     },
-    # ── 正式公文：GB/T 9704-2012 严格版，四级标题体系 ──
+    # ── 公文正文样式：接近公文正文排版，非完整公文模板 ──
     # heading_styles 按 markdown heading level 映射（# 已被 title_font 单独处理）
     # ## = 公文一级标题（一、）→ 黑体
     # ### = 公文二级标题（（一））→ 楷体_GB2312 加粗
     # #### = 公文三级标题（1.）→ 仿宋_GB2312 加粗
     # H5 = 公文四级标题（（1））→ 仿宋_GB2312 加粗
     "official": {
-        "display_name": "正式公文",
+        "display_name": "公文正文样式",
         "page_margins": {"top": 3.7, "bottom": 3.5, "left": 2.8, "right": 2.6},
         "title_font": "方正小标宋简体", "title_size": 22,
         "heading_styles": {
@@ -101,16 +101,17 @@ DOCX_PRESETS = {
             2: HeadingStyleDef("黑体", 16),                   # ## 一、公文一级标题
             3: HeadingStyleDef("楷体_GB2312", 16, bold=True), # ### （一）公文二级标题
             4: HeadingStyleDef("仿宋_GB2312", 16, bold=True), # #### 1. 公文三级标题
+            5: HeadingStyleDef("仿宋_GB2312", 16, bold=True), # ##### （1）公文四级标题
         },
         "body_font": "仿宋_GB2312", "body_size": 16,
         "line_spacing": 28,
         "first_line_indent_chars": 2,
         "align": "justify",
     },
-    # ── 机关内部文件 ──
+    # ── 内部材料正文样式 ──
     # ## = 一级标题 → 黑体, ### = 二级标题 → 宋体加粗
     "internal": {
-        "display_name": "机关内部文件",
+        "display_name": "内部材料正文样式",
         "page_margins": {"top": 2.3, "bottom": 2.3, "left": 2.54, "right": 2.54},
         "title_font": "黑体", "title_size": 18,
         "heading_styles": {
@@ -124,10 +125,10 @@ DOCX_PRESETS = {
         "first_line_indent_chars": 2,
         "align": "justify",
     },
-    # ── 调研/分析报告 ──
+    # ── 报告正文样式 ──
     # ## = 一级标题 → 黑体, ### = 二级标题 → 宋体加粗
     "report": {
-        "display_name": "调研/分析报告",
+        "display_name": "报告正文样式",
         "page_margins": {"top": 2.2, "bottom": 2.2, "left": 2.54, "right": 2.54},
         "title_font": "黑体", "title_size": 16,
         "heading_styles": {

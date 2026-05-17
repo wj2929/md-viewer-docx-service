@@ -108,7 +108,7 @@ def embed_fonts_if_requested(
     warnings: list[str] = []
     try:
         with zipfile.ZipFile(docx_path, "a", compression=zipfile.ZIP_DEFLATED) as zf:
-            for font_path in existing[:1]:
+            for font_path in existing:
                 arcname = f"word/fonts/{font_path.name}"
                 if arcname in zf.namelist():
                     continue

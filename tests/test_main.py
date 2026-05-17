@@ -53,6 +53,15 @@ class TestHealthz:
         data = client.get("/healthz").json()
         assert data["styles"] == ["preview", "standard", "official", "internal", "report"]
 
+    def test_healthz_reports_font_status_by_style(self, client):
+        data = client.get("/healthz").json()
+
+        assert "fontStatus" in data
+        assert set(data["fontStatus"]) >= {"standard", "official", "internal", "report"}
+        assert "仿宋_GB2312" in data["fontStatus"]["official"]
+        assert data["fontStatus"]["official"]["仿宋_GB2312"]["status"] in {"exact", "fallback", "missing"}
+        assert "embeddable" in data["fontStatus"]["official"]["仿宋_GB2312"]
+
     def test_dot_renderer_requires_dot_binary(self, client):
         with patch("app.main.shutil.which", return_value=None):
             data = client.get("/healthz").json()
@@ -153,11 +162,43 @@ class TestConvertPlainText:
         assert resp.status_code == 200
         assert "x-convert-warnings" in resp.headers
 
+    def test_formal_style_font_fallback_is_returned_as_warning(self, client):
+        with patch("app.main._font_status_by_style", return_value={
+            "official": {
+                "仿宋_GB2312": {
+                    "status": "fallback",
+                    "resolved": "Noto Sans CJK SC",
+                    "fallback": "Noto Sans CJK SC",
+                    "embeddable": True,
+                }
+            }
+        }):
+            resp = client.post("/convert", json={
+                "markdown": "# 字体测试\n\n正文",
+                "style": "official",
+            })
+
+        assert resp.status_code == 200
+        warnings = json.loads(resp.headers["x-convert-warnings"])
+        assert any("仿宋_GB2312" in warning and "Noto Sans CJK SC" in warning for warning in warnings)
+
     def test_null_footer_text_disables_generated_branding(self, client):
         resp = client.post("/convert", json={
             "markdown": "# 标题\n\n正文",
             "style": "preview",
             "footerText": None,
+        })
+
+        assert resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+            document_xml = z.read("word/document.xml").decode("utf-8")
+        assert "由 MD Viewer 生成" not in document_xml
+
+    @pytest.mark.parametrize("style", ["official", "internal", "report"])
+    def test_formal_styles_default_to_no_generated_branding(self, client, style):
+        resp = client.post("/convert", json={
+            "markdown": "# 标题\n\n正文",
+            "style": style,
         })
 
         assert resp.status_code == 200

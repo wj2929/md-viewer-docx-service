@@ -139,6 +139,16 @@ X-API-Key: your-api-key
   "mode": "slim",
   "styles": ["preview", "standard", "official", "internal", "report"],
   "fontsAvailable": ["Noto Sans CJK SC"],
+  "fontStatus": {
+    "official": {
+      "仿宋_GB2312": {
+        "status": "fallback",
+        "resolved": "Noto Sans CJK SC",
+        "fallback": "Noto Sans CJK SC",
+        "embeddable": true
+      }
+    }
+  },
   "embedFontSupported": true,
   "chartRenderersAvailable": ["dot"],
   "minClientVersion": "1.7.0",
@@ -151,6 +161,7 @@ X-API-Key: your-api-key
 
 - 客户端启动或服务地址变更后先调用 `/healthz`。
 - `styles` 应以服务返回值为准，客户端不要写死。
+- `fontStatus` 用于判断各样式字体是 `exact`、`fallback` 还是 `missing`；正式样式使用 fallback 时应向用户显示降级提示。
 - `mode=slim` 适合客户端预渲染图片后上传。
 - `mode=full` 表示镜像包含 Playwright，但 `/convert-source` 是否可用还要看 `/readyz`。
 - `chartRenderersAvailable` 是 `/convert` 旧服务端渲染能力，例如 Graphviz 在这里显示为 `dot`。
@@ -202,7 +213,7 @@ X-API-Key: your-api-key
 | `markdown` | string | 是 | - | Markdown 正文，长度 1 到 500000 字符 |
 | `style` | string | 否 | `standard` | DOCX 样式，支持 `preview`、`standard`、`official`、`internal`、`report` |
 | `title` | string \| null | 否 | `null` | 文档标题，最长 200 字符 |
-| `footerText` | string \| null | 否 | `由 MD Viewer 生成` | 页脚文本，最长 200 字符；传 `null` 或空字符串时不显示页脚署名 |
+| `footerText` | string \| null | 否 | 按样式决定 | 页脚文本，最长 200 字符；`standard/preview` 默认 `由 MD Viewer 生成`，`official/internal/report` 默认不显示；传 `null` 或空字符串时不显示页脚署名 |
 | `images` | array | 否 | `[]` | 客户端预渲染图片列表 |
 | `renderCharts` | boolean | 否 | `false` | 是否由服务端渲染图表；完整能力建议使用 `/convert-source` |
 | `chartRenderers` | string[] | 否 | `[]` | 限定服务端图表渲染器，例如 `["mermaid", "dot"]` |
@@ -268,6 +279,12 @@ curl -X POST http://localhost:3179/convert \
 - `X-Charts-Failed` 大于 0 时，建议提示“部分图表未成功导出”。
 - 下载文件名可由调用方自行决定；服务默认返回 `export.docx`。
 
+### `referenceDocxBase64` 能力边界
+
+`referenceDocxBase64` 只作为有限参考 DOCX 使用：服务会验证文件可读并以它初始化文档，但后续仍会按当前 `style` 重设页面、标题、正文、表格、图片等样式。它不保证完整继承 Word 模板中的编号样式、页眉页脚、目录字段、主题字体、所有段落样式或单位专用模板结构。
+
+如果调用方需要完整模板能力，应使用后续独立模板系统，而不是依赖当前样式预设。
+
 ## `POST /convert-source`
 
 `/convert-source` 是完整服务端渲染接口。调用方只需要提供 Markdown 内容、可访问的 Markdown URL，或包含 Markdown 与资源的 bundle，服务端即可生成 DOCX。
@@ -296,7 +313,7 @@ curl -X POST http://localhost:3179/convert \
 | `fallbackMode` | `partial` \| `fail` | 否 | `partial` | 渲染失败时部分导出还是直接失败 |
 | `theme` | `light` \| `dark` | 否 | `light` | 预留主题字段 |
 | `embedFont` | boolean | 否 | `false` | 是否尝试嵌入字体 |
-| `footerText` | string \| null | 否 | `由 MD Viewer 生成` | 页脚文本，传 `null` 或空字符串时不显示页脚署名 |
+| `footerText` | string \| null | 否 | 按样式决定 | 页脚文本；`standard/preview` 默认 `由 MD Viewer 生成`，`official/internal/report` 默认不显示；传 `null` 或空字符串时不显示页脚署名 |
 | `debugManifest` | boolean | 否 | `false` | 预留调试字段，生产环境通常保持 `false` |
 | `clientVersion` | string \| null | 否 | `null` | 客户端版本，最长 20 字符 |
 | `referenceDocxBase64` | string \| null | 否 | `null` | 自定义参考 DOCX 模板，base64 最大 20000000 字符 |
@@ -387,6 +404,7 @@ Bundle 路径使用 POSIX 相对路径，不允许绝对路径或跳出包根目
 | `X-Service-Mode` | 固定为 `fullFidelity` |
 | `X-Render-Status` | `success`、`partial`、`failed` 或 `timeout` |
 | `X-Render-Warning-Count` | renderer 和 DOCX 生成阶段 warning 数 |
+| `X-Convert-Warnings` | JSON 字符串数组，包含字体降级、reference.docx 降级和 DOCX 生成 warning |
 | `X-Render-Failed-Blocks` | renderer 报告的失败块数量 |
 | `X-Charts-Rendered` | 已注入 DOCX 的截图数量 |
 | `X-Render-Summary-Base64` | UTF-8 JSON 摘要的 base64 编码 |
@@ -414,9 +432,9 @@ DOCX 输出不是浏览器页面截图。图表、公式和画板类内容会尽
 |---|---|
 | `preview` | 尽量接近 MD Viewer 预览排版，适合图表较多的文档 |
 | `standard` | 通用文档 |
-| `official` | 正式公文 |
-| `internal` | 机关内部文件 |
-| `report` | 调研/分析报告 |
+| `official` | 公文正文样式，不包含红头、发文字号、版记、印章区等完整公文模板能力 |
+| `internal` | 内部材料正文样式，不包含密级、编号、固定页眉页脚等完整模板字段 |
+| `report` | 报告正文样式，不包含封面、目录、摘要、图表清单和参考文献格式 |
 
 ## 环境变量
 
@@ -441,6 +459,21 @@ DOCX 输出不是浏览器页面截图。图表、公式和画板类内容会尽
 | `MDV_PLANTUML_RETRIES` | `3` | PlantUML 渲染重试次数 |
 
 环境变量示例见 `.env.example`。
+
+### 离线字体
+
+开源包只应分发授权清晰的开源字体，例如 Noto / 思源系列。`仿宋_GB2312`、`方正小标宋简体`、`宋体`、`黑体`、`微软雅黑` 等商业或系统字体不随公开仓库、Release、Docker 镜像或自动下载脚本分发。
+
+私有部署如已取得授权，可以通过离线目录挂载：
+
+```bash
+docker run --rm \
+  -v /path/to/private-fonts:/opt/mdv-fonts:ro \
+  -e MD_VIEWER_DOCX_FONT_DIRS=/opt/mdv-fonts \
+  md-viewer-docx-service:latest
+```
+
+服务会在 `/healthz.fontStatus` 中报告字体状态；导出时如果只能使用 fallback 字体，应通过 warning 提示用户实际效果可能与公文/报告预期不同。
 
 ## Docker
 
@@ -513,7 +546,7 @@ curl http://localhost:3180/readyz
 - bundle 单个资源最大 5MB。
 - URL 输入最大下载 5MB。
 - `/healthz.maxImagesPerRequest` 为 `null` 表示服务端不设置固定图片数量上限，但仍受请求体大小、内存和超时限制。
-- 字体嵌入受 Office/WPS 支持和字体授权影响，服务会失败降级并返回 warning。
+- 字体嵌入受 Office/WPS 支持和字体授权影响，服务会失败降级并返回 warning。未授权商业或系统字体不随开源包分发，需由用户自行放置或私有部署挂载。
 - KaTeX 当前优先保证 Word 中可见，不保证公式可编辑。
 
 ## 测试

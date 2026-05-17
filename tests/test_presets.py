@@ -47,6 +47,11 @@ class TestDocxPresets:
                 assert key in margins, f"Preset '{name}' missing margin '{key}'"
                 assert isinstance(margins[key], (int, float))
 
+    def test_formal_display_names_are_body_style_presets(self):
+        assert DOCX_PRESETS["official"]["display_name"] == "公文正文样式"
+        assert DOCX_PRESETS["internal"]["display_name"] == "内部材料正文样式"
+        assert DOCX_PRESETS["report"]["display_name"] == "报告正文样式"
+
 
 class TestNonPreviewBlockStyles:
     def test_cover_legacy_styles_only(self):

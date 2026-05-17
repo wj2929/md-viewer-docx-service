@@ -19,7 +19,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -102,6 +102,124 @@ def _get_available_fonts() -> list[str]:
     return sorted(fonts)
 
 
+FONT_ALIASES = {
+    "微软雅黑": ("Microsoft YaHei", "微软雅黑", "msyh"),
+    "方正小标宋简体": ("FZXiaoBiaoSong-B05S", "方正小标宋简体", "FZXiaoBiaoSong"),
+    "仿宋_GB2312": ("FangSong", "仿宋_GB2312", "仿宋"),
+    "楷体_GB2312": ("KaiTi", "楷体_GB2312", "楷体"),
+    "宋体": ("SimSun", "Songti SC", "宋体"),
+    "黑体": ("SimHei", "Heiti SC", "黑体"),
+}
+
+FONT_FALLBACKS = {
+    "微软雅黑": ("Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "NotoSansCJKsc-Regular"),
+    "方正小标宋简体": ("Noto Serif CJK SC", "Source Han Serif SC", "Noto Sans CJK SC", "NotoSansCJKsc-Regular"),
+    "仿宋_GB2312": ("Noto Serif CJK SC", "Source Han Serif SC", "Noto Sans CJK SC", "NotoSansCJKsc-Regular"),
+    "楷体_GB2312": ("Noto Serif CJK SC", "Source Han Serif SC", "Noto Sans CJK SC", "NotoSansCJKsc-Regular"),
+    "宋体": ("Noto Serif CJK SC", "Source Han Serif SC", "Noto Sans CJK SC", "NotoSansCJKsc-Regular"),
+    "黑体": ("Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "NotoSansCJKsc-Regular"),
+}
+
+
+def _normalize_font_name(name: str) -> str:
+    return re.sub(r"[\s_\-]+", "", name).lower()
+
+
+def _has_font_name(name: str, available: set[str]) -> bool:
+    target = _normalize_font_name(name)
+    for font in available:
+        normalized = _normalize_font_name(font)
+        if target == normalized or target in normalized or normalized in target:
+            return True
+    return False
+
+
+def _is_embeddable_font_name(name: str, font_paths=None) -> bool:
+    target = _normalize_font_name(name)
+    paths = font_paths if font_paths is not None else get_embeddable_font_paths()
+    for font_path in paths:
+        stem = _normalize_font_name(font_path.stem)
+        if target == stem or target in stem or stem in target:
+            return True
+    return False
+
+
+def _font_status_for_name(name: str, available: set[str], font_paths=None) -> dict:
+    aliases = FONT_ALIASES.get(name, (name,))
+    for alias in aliases:
+        if _has_font_name(alias, available):
+            return {
+                "status": "exact",
+                "resolved": alias,
+                "fallback": None,
+                "embeddable": _is_embeddable_font_name(alias, font_paths),
+            }
+
+    for fallback in FONT_FALLBACKS.get(name, ()):
+        if _has_font_name(fallback, available):
+            return {
+                "status": "fallback",
+                "resolved": fallback,
+                "fallback": fallback,
+                "embeddable": _is_embeddable_font_name(fallback, font_paths),
+            }
+
+    return {
+        "status": "missing",
+        "resolved": None,
+        "fallback": None,
+        "embeddable": False,
+    }
+
+
+def _font_status_by_style() -> dict[str, dict[str, dict]]:
+    available = set(_get_available_fonts())
+    font_paths = get_embeddable_font_paths()
+    status: dict[str, dict[str, dict]] = {}
+    for style in ("standard", "official", "internal", "report"):
+        names: list[str] = []
+        if style == "standard":
+            names.append("微软雅黑")
+        else:
+            preset = DOCX_PRESETS[style]
+            for key in ("title_font", "body_font"):
+                value = preset.get(key)
+                if value and value != "auto":
+                    names.append(value)
+            for heading_style in preset.get("heading_styles", {}).values():
+                names.append(heading_style.font)
+
+        style_status: dict[str, dict] = {}
+        for name in dict.fromkeys(names):
+            style_status[name] = _font_status_for_name(name, available, font_paths)
+        status[style] = style_status
+    return status
+
+
+FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER = {"official", "internal", "report"}
+
+
+def _default_footer_for_style(style: str) -> str | None:
+    if style in FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER:
+        return None
+    return "由 MD Viewer 生成"
+
+
+def _font_warnings_for_style(style: str) -> list[str]:
+    if style not in {"official", "internal", "report"}:
+        return []
+
+    warnings: list[str] = []
+    for font_name, status in _font_status_by_style().get(style, {}).items():
+        state = status.get("status")
+        if state == "fallback":
+            fallback = status.get("fallback") or status.get("resolved") or "可用替代字体"
+            warnings.append(f"未检测到 {font_name}，已使用 {fallback} 近似替代，实际显示取决于 Word/WPS 字体环境")
+        elif state == "missing":
+            warnings.append(f"未检测到 {font_name}，且未找到可用替代字体，实际显示取决于 Word/WPS 字体替换")
+    return warnings
+
+
 def _image_layout_for_style(style: str) -> ImageLayout | None:
     if style == "preview":
         return ImageLayout(
@@ -132,13 +250,19 @@ class ConvertRequest(BaseModel):
     markdown: str = Field(..., min_length=1, max_length=500_000)
     style: str = Field(default="standard", max_length=20)
     title: Optional[str] = Field(default=None, max_length=200)
-    footerText: Optional[str] = Field(default="由 MD Viewer 生成", max_length=200)
+    footerText: Optional[str] = Field(default=None, max_length=200)
     images: list[ImageItem] = Field(default_factory=list)
     renderCharts: bool = Field(default=False)
     chartRenderers: list[str] = Field(default_factory=list)
     embedFont: bool = Field(default=False)
     clientVersion: Optional[str] = Field(default=None, max_length=20)
     referenceDocxBase64: Optional[str] = Field(default=None, max_length=20_000_000)
+
+    @model_validator(mode="after")
+    def default_footer_by_style(self):
+        if "footerText" not in self.model_fields_set:
+            self.footerText = _default_footer_for_style(self.style)
+        return self
 
 
 def _model_or_dict(value):
@@ -294,6 +418,7 @@ async def healthz():
         "mode": mode,
         "styles": list(STYLE_ORDER),
         "fontsAvailable": _get_available_fonts(),
+        "fontStatus": _font_status_by_style(),
         "embedFontSupported": bool(get_embeddable_font_paths()),
         "chartRenderersAvailable": chart_renderers,
         "minClientVersion": MIN_CLIENT_VERSION,
@@ -345,7 +470,7 @@ async def convert(req: ConvertRequest, request: Request):
     mode_used = "clientRendered"
     charts_rendered = 0
     charts_failed = 0
-    warnings: list[str] = []
+    warnings: list[str] = _font_warnings_for_style(req.style)
 
     md = req.markdown
     image_map = {}
@@ -504,7 +629,12 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
             )
 
         font_warnings = await asyncio.to_thread(embed_fonts_if_requested, tmp_path, req.embedFont)
-        warnings = reference_warnings + font_warnings + plantuml_result.warnings
+        warnings = (
+            _font_warnings_for_style(req.style)
+            + reference_warnings
+            + font_warnings
+            + plantuml_result.warnings
+        )
 
         failed_blocks = _model_or_dict(render_result.stats).get("failedBlocks", 0)
         headers = {
@@ -512,6 +642,7 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
             "X-Service-Mode": "fullFidelity",
             "X-Render-Status": render_result.status,
             "X-Render-Warning-Count": str(len(render_result.warnings) + len(warnings)),
+            "X-Convert-Warnings": json.dumps(warnings, ensure_ascii=True),
             "X-Render-Failed-Blocks": str(failed_blocks),
             "X-Charts-Rendered": str(charts_rendered),
             "X-Render-Summary-Base64": _render_summary_header(render_result.renderSummary),

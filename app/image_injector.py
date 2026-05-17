@@ -55,6 +55,21 @@ class ImageData:
             raise ValueError(f"Image {id}: {w}x{h} = {w*h} pixels exceeds limit {IMAGE_MAX_PIXELS}")
 
 
+def _iter_paragraphs(container):
+    """递归遍历 document/cell 中的段落，覆盖表格单元格等容器。"""
+    seen_cells: set[int] = set()
+    for paragraph in getattr(container, "paragraphs", []):
+        yield paragraph
+    for table in getattr(container, "tables", []):
+        for row in table.rows:
+            for cell in row.cells:
+                cell_key = id(cell._tc)
+                if cell_key in seen_cells:
+                    continue
+                seen_cells.add(cell_key)
+                yield from _iter_paragraphs(cell)
+
+
 def resolve_image_width_cm(
     width_cm: float,
     style: str = "standard",
@@ -125,7 +140,7 @@ def inject_images(
     doc = Document(doc_path)
     injected = 0
 
-    for para in doc.paragraphs:
+    for para in _iter_paragraphs(doc):
         text = para.text.strip()
         m = PLACEHOLDER_PATTERN.match(text)
         if not m:

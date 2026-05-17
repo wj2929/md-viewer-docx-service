@@ -4,12 +4,12 @@ Markdown → Word 文档生成器
 支持多种导出格式：
 - preview: 预览一致格式（接近 Markdown 预览 / PDF 导出）
 - standard: 通用格式（清晰易读，适合日常使用）
-- official: 正式公文格式（GB/T 9704-2012 严格版，四级标题体系）
-- internal: 机关内部文件格式
-- report: 调研/分析报告格式
+- official: 公文正文样式（接近公文正文排版，非完整公文模板）
+- internal: 内部材料正文样式
+- report: 报告正文样式
 
 Markdown 解析策略：使用正则逐行解析，避免引入额外依赖。
-支持：标题(H1-H4)、段落、无序/有序列表、表格、代码块、粗体/斜体。
+支持：标题(H1-H6)、段落、无序/有序列表、表格、代码块、粗体/斜体。
 """
 import re
 import logging
@@ -43,6 +43,8 @@ PREVIEW_LIST_LINE_SPACING = 1.25
 PREVIEW_TABLE_LINE_SPACING = 1.0
 PREVIEW_TABLE_FONT_SIZE = Pt(8.0)
 PREVIEW_TABLE_AFTER_SPACING = Pt(4)
+_DEFAULT_FOOTER = object()
+_FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER = {"official", "internal", "report"}
 PREVIEW_TABLE_CELL_MARGIN_TOP = 55
 PREVIEW_TABLE_CELL_MARGIN_START = 110
 PREVIEW_TABLE_CELL_MARGIN_BOTTOM = 55
@@ -88,7 +90,7 @@ class TextRun:
 class Block:
     """文档块"""
     type: BlockType
-    level: int = 0  # heading level (1-4)
+    level: int = 0  # heading level (1-6) or list nesting level (0+)
     runs: List[TextRun] = field(default_factory=list)
     text: str = ""
     rows: List[List[str]] = field(default_factory=list)  # table rows
@@ -103,7 +105,7 @@ class MessageDTO:
 
 # ==================== Markdown 解析 ====================
 
-_RE_HEADING = re.compile(r"^(#{1,4})\s+(.+)$")
+_RE_HEADING = re.compile(r"^(#{1,6})\s+(.+)$")
 _RE_UL = re.compile(r"^(\s*)[-*+]\s+(.+)$")
 _RE_OL = re.compile(r"^(\s*)\d+[.)]\s+(.+)$")
 _RE_CODE_FENCE = re.compile(r"^```")
@@ -112,6 +114,22 @@ _RE_TABLE_ROW = re.compile(r"^\|(.+)\|$")
 _RE_TABLE_SEP = re.compile(r"^\|[\s:|-]+\|$")
 _RE_NOTE_PREFIX = re.compile(r"^\s*(?:\*\*)?\s*(注意|说明|注|Note|Warning)\s*[:：]\s*(?:\*\*)?\s*", re.IGNORECASE)
 _RE_GFM_ALERT = re.compile(r"^\s*\[!(NOTE|WARNING|TIP|IMPORTANT)\]\s*", re.IGNORECASE)
+
+
+def _markdown_indent_level(indent: str) -> int:
+    """把 Markdown 列表前导空白转换为粗略层级，兼容 2/3/4 空格缩进。"""
+    width = len(indent.replace("\t", "    "))
+    if width <= 0:
+        return 0
+    return ((width - 1) // 4) + 1
+
+
+def _resolve_footer_text(style: str, footer_text):
+    if footer_text is not _DEFAULT_FOOTER:
+        return footer_text
+    if style in _FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER:
+        return None
+    return "由 MD Viewer 生成"
 
 
 def _decode_markdown_text(text: str) -> str:
@@ -246,6 +264,7 @@ def parse_markdown(md_text: str, ref_id_to_index: Optional[Dict[str, int]] = Non
         if m:
             blocks.append(Block(
                 type=BlockType.UNORDERED_LIST,
+                level=_markdown_indent_level(m.group(1)),
                 runs=parse_inline(m.group(2), ref_id_to_index),
                 text=m.group(2),
             ))
@@ -257,6 +276,7 @@ def parse_markdown(md_text: str, ref_id_to_index: Optional[Dict[str, int]] = Non
         if m:
             blocks.append(Block(
                 type=BlockType.ORDERED_LIST,
+                level=_markdown_indent_level(m.group(1)),
                 runs=parse_inline(m.group(2), ref_id_to_index),
                 text=m.group(2),
             ))
@@ -481,6 +501,14 @@ def _set_row_cant_split(row):
         tr_pr.append(OxmlElement("w:cantSplit"))
 
 
+def _set_row_repeat_header(row):
+    tr_pr = row._tr.get_or_add_trPr()
+    if tr_pr.find(qn("w:tblHeader")) is None:
+        tbl_header = OxmlElement("w:tblHeader")
+        tbl_header.set(qn("w:val"), "true")
+        tr_pr.append(tbl_header)
+
+
 def _set_table_borders(table, color: str = "D0D7DE", size: str = "4", val: str = "single"):
     tbl_pr = table._tbl.tblPr
     borders = tbl_pr.find(qn("w:tblBorders"))
@@ -628,6 +656,8 @@ def _add_table(
     for i, row_data in enumerate(rows):
         if mode == "preview":
             _set_row_cant_split(table.rows[i])
+        if i == 0:
+            _set_row_repeat_header(table.rows[i])
         for j, cell_text in enumerate(row_data):
             if j < n_cols:
                 cell = table.cell(i, j)
@@ -694,6 +724,8 @@ def _add_styled_table(
 
     for i, row_data in enumerate(rows):
         _set_row_cant_split(table.rows[i])
+        if i == 0:
+            _set_row_repeat_header(table.rows[i])
         for j, cell_text in enumerate(row_data):
             if j >= n_cols:
                 continue
@@ -1127,15 +1159,16 @@ def _render_blocks(
         2: Pt(body_size.pt + 4),
         3: Pt(body_size.pt + 2),
         4: Pt(body_size.pt + 1),
+        5: Pt(body_size.pt),
+        6: Pt(max(body_size.pt - 1, 8)),
     }
 
-    list_counter = 0  # 有序列表计数器
-    prev_was_ol = False
+    ordered_counters: Dict[int, int] = {}
     preview_mode = table_mode == "preview" or code_mode == "preview"
 
     for idx, block in enumerate(blocks):
         if block.type == BlockType.HEADING:
-            heading_level = min(block.level, 4)
+            heading_level = min(block.level, 6)
             if heading_styles and block.level in heading_styles:
                 hs = heading_styles[block.level]
                 h_font = hs.font if isinstance(hs, HeadingStyleDef) else hs.get("font", heading_font)
@@ -1207,7 +1240,7 @@ def _render_blocks(
         elif block.type == BlockType.UNORDERED_LIST:
             para = doc.add_paragraph()
             para.alignment = align
-            para.paragraph_format.left_indent = list_left_indent
+            para.paragraph_format.left_indent = list_left_indent + Cm(0.55 * block.level)
             para.paragraph_format.first_line_indent = -list_hanging_indent
             bullet_run = para.add_run("\u2022  ")
             _set_run_fonts(bullet_run, font_name, east_asia_font_name)
@@ -1223,17 +1256,18 @@ def _render_blocks(
                 link_underline=link_underline,
             )
             _set_paragraph_spacing(para, before=list_spacing_before, after=list_spacing_after, line=list_line_spacing or line_spacing)
-            prev_was_ol = False
+            ordered_counters.clear()
 
         elif block.type == BlockType.ORDERED_LIST:
-            if not prev_was_ol:
-                list_counter = 0
-            list_counter += 1
+            for level in list(ordered_counters):
+                if level > block.level:
+                    del ordered_counters[level]
+            ordered_counters[block.level] = ordered_counters.get(block.level, 0) + 1
             para = doc.add_paragraph()
             para.alignment = align
-            para.paragraph_format.left_indent = list_left_indent
+            para.paragraph_format.left_indent = list_left_indent + Cm(0.55 * block.level)
             para.paragraph_format.first_line_indent = -list_hanging_indent
-            num_run = para.add_run(f"{list_counter}.  ")
+            num_run = para.add_run(f"{ordered_counters[block.level]}.  ")
             _set_run_fonts(num_run, font_name, east_asia_font_name)
             num_run.font.size = body_size
             _apply_runs(
@@ -1247,7 +1281,6 @@ def _render_blocks(
                 link_underline=link_underline,
             )
             _set_paragraph_spacing(para, before=list_spacing_before, after=list_spacing_after, line=list_line_spacing or line_spacing)
-            prev_was_ol = True
 
         elif block.type == BlockType.TABLE:
             if block_style is not None:
@@ -1391,7 +1424,7 @@ def _render_blocks(
 
         # 重置有序列表计数器
         if block.type != BlockType.ORDERED_LIST:
-            prev_was_ol = False
+            ordered_counters.clear()
 
 
 # ==================== 预设体系（已提取到 app/presets.py）====================
@@ -1473,7 +1506,7 @@ def generate_docx_from_content(
     *,
     style: str = "standard",
     title: str = None,
-    footer_text: Optional[str] = "由 MD Viewer 生成",
+    footer_text=_DEFAULT_FOOTER,
     references: Optional[List[dict]] = None,
     reference_docx_path: Optional[str] = None,
 ):
@@ -1492,6 +1525,7 @@ def generate_docx_from_content(
     if style not in VALID_STYLES:
         logger.warning(f"[DocxExport] 无效的 style 参数: {style!r}，回退到 standard")
         style = "standard"
+    footer_text = _resolve_footer_text(style, footer_text)
 
     # 构建引用映射
     ref_id_to_index = _build_ref_id_to_index(references)

@@ -34,3 +34,14 @@ def test_footer_text_can_be_disabled_with_null():
     req = ConvertSourceRequest(sourceType="markdown", markdown="# 标题", footerText=None)
 
     assert req.footerText is None
+
+
+def test_formal_source_styles_default_to_no_footer_text():
+    for style in ("official", "internal", "report"):
+        req = ConvertSourceRequest(sourceType="markdown", markdown="# 标题", style=style)
+        assert req.footerText is None
+
+
+def test_standard_source_style_keeps_generated_footer_by_default():
+    req = ConvertSourceRequest(sourceType="markdown", markdown="# 标题", style="standard")
+    assert req.footerText == "由 MD Viewer 生成"

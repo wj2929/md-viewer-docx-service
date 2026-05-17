@@ -160,6 +160,23 @@ class TestInjectImages:
         assert round(image_para.paragraph_format.space_after.cm, 2) == 0.45
         assert image_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
 
+    def test_inject_replaces_placeholder_inside_table_cell(self, tmp_path, small_png_base64):
+        placeholder_id = "mdv__chart__a0b1c2d3__"
+        doc_path = str(tmp_path / "table-cell-image.docx")
+        doc = Document()
+        table = doc.add_table(rows=1, cols=1)
+        table.cell(0, 0).text = f"![]({placeholder_id})"
+        doc.save(doc_path)
+
+        count = inject_images(doc_path, {placeholder_id: ImageData(placeholder_id, small_png_base64)})
+
+        assert count == 1
+        reopened = Document(doc_path)
+        cell_para = reopened.tables[0].cell(0, 0).paragraphs[0]
+        assert placeholder_id not in cell_para.text
+        assert cell_para._element.xpath(".//w:drawing")
+        assert cell_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
+
 
 class TestImageWidth:
     def test_preview_respects_client_image_width_without_forced_enlarge(self):

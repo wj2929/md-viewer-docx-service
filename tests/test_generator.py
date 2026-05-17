@@ -66,6 +66,12 @@ class TestParseMarkdown:
         assert blocks[0].type == BlockType.HEADING
         assert blocks[0].level == 1
 
+    def test_h5_h6_headings_are_preserved(self):
+        blocks = parse_markdown("##### （1）四级标题\n\n###### 备注标题")
+        headings = [b for b in blocks if b.type == BlockType.HEADING]
+        assert [h.level for h in headings] == [5, 6]
+        assert [h.text for h in headings] == ["（1）四级标题", "备注标题"]
+
     def test_paragraph(self):
         blocks = parse_markdown("这是一段正文。")
         assert any(b.type == BlockType.PARAGRAPH for b in blocks)
@@ -77,6 +83,16 @@ class TestParseMarkdown:
     def test_ordered_list(self):
         blocks = parse_markdown("1. 第一项\n2. 第二项")
         assert any(b.type == BlockType.ORDERED_LIST for b in blocks)
+
+    def test_nested_list_levels_are_preserved(self):
+        blocks = parse_markdown("1. 第一项\n   1. 子项\n2. 第二项\n  - 子项目")
+        list_blocks = [b for b in blocks if b.type in (BlockType.ORDERED_LIST, BlockType.UNORDERED_LIST)]
+        assert [(b.type, b.level, b.text) for b in list_blocks] == [
+            (BlockType.ORDERED_LIST, 0, "第一项"),
+            (BlockType.ORDERED_LIST, 1, "子项"),
+            (BlockType.ORDERED_LIST, 0, "第二项"),
+            (BlockType.UNORDERED_LIST, 1, "子项目"),
+        ]
 
     def test_table(self):
         md = "| A | B |\n|---|---|\n| 1 | 2 |"
@@ -123,6 +139,29 @@ class TestGenerateDocx:
             xml = zf.read("word/document.xml").decode("utf-8")
 
         assert "由 MD Viewer 生成" not in xml
+
+    @pytest.mark.parametrize(
+        ("style", "has_default_footer"),
+        [
+            ("preview", True),
+            ("standard", True),
+            ("official", False),
+            ("internal", False),
+            ("report", False),
+        ],
+    )
+    def test_default_footer_depends_on_style(self, tmp_path, style, has_default_footer):
+        out_path = str(tmp_path / f"default-footer-{style}.docx")
+        generate_docx_from_content(
+            content="# 标题\n\n正文",
+            output_path=out_path,
+            style=style,
+        )
+
+        with zipfile.ZipFile(out_path) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+
+        assert ("由 MD Viewer 生成" in xml) is has_default_footer
 
     def test_preview_uses_a4_and_narrow_margins(self, tmp_path):
         out_path = str(tmp_path / "preview.docx")
@@ -311,6 +350,30 @@ class TestGenerateDocx:
         assert "**" not in text
         assert any(run.text == "务工就业证明" and run.bold for p in doc.paragraphs for run in p.runs)
         assert any(run.text == "一中实验班/清北班" and run.bold for p in doc.paragraphs for run in p.runs)
+
+    def test_nested_ordered_lists_restart_child_numbering_and_resume_parent(self, tmp_path):
+        out_path = str(tmp_path / "nested-ordered-list.docx")
+        generate_docx_from_content(
+            content="# 标题\n\n1. 第一项\n   1. 子项\n2. 第二项",
+            output_path=out_path,
+            style="official",
+        )
+
+        texts = [p.text.strip() for p in Document(out_path).paragraphs if "项" in p.text]
+        assert texts == ["1.  第一项", "1.  子项", "2.  第二项"]
+
+    def test_official_h5_uses_heading_style_not_body_paragraph(self, tmp_path):
+        out_path = str(tmp_path / "official-h5.docx")
+        generate_docx_from_content(
+            content="# 标题\n\n##### （1）四级标题",
+            output_path=out_path,
+            style="official",
+        )
+
+        with zipfile.ZipFile(out_path) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+        assert 'w:pStyle w:val="Heading5"' in xml
+        assert 'w:eastAsia="仿宋_GB2312"' in xml
 
     def test_preview_preserves_horizontal_rule_before_heading(self, tmp_path):
         out_path = str(tmp_path / "preview-horizontal-rule.docx")

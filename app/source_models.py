@@ -3,6 +3,9 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
 
+FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER = {"official", "internal", "report"}
+
+
 class BundleResource(BaseModel):
     path: str = Field(..., min_length=1, max_length=1024)
     kind: Literal["text", "binary"]
@@ -31,13 +34,15 @@ class ConvertSourceRequest(BaseModel):
     fallbackMode: Literal["partial", "fail"] = "partial"
     theme: Literal["light", "dark"] = "light"
     embedFont: bool = False
-    footerText: Optional[str] = Field(default="由 MD Viewer 生成", max_length=200)
+    footerText: Optional[str] = Field(default=None, max_length=200)
     debugManifest: bool = False
     clientVersion: Optional[str] = Field(default=None, max_length=20)
     referenceDocxBase64: Optional[str] = Field(default=None, max_length=20_000_000)
 
     @model_validator(mode="after")
     def validate_markdown_source(self):
+        if "footerText" not in self.model_fields_set:
+            self.footerText = None if self.style in FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER else "由 MD Viewer 生成"
         if self.sourceType == "markdown" and not self.markdown:
             raise ValueError("markdown is required when sourceType=markdown")
         if self.sourceType == "url" and not self.url:

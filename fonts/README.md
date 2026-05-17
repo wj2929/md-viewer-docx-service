@@ -37,7 +37,7 @@ export MD_VIEWER_DOCX_FONT_DIRS="/path/to/font-dir"
 
 ## 可选商业或系统字体
 
-如果部署环境有合法授权，可以把下列字体放入本目录，或通过 `MD_VIEWER_DOCX_FONT_PATHS` / `MD_VIEWER_DOCX_FONT_DIRS` 挂载给服务：
+如果部署环境有合法授权，可以把下列字体放入私有目录，或通过 `MD_VIEWER_DOCX_FONT_PATHS` / `MD_VIEWER_DOCX_FONT_DIRS` 挂载给服务。公开仓库、公开 Release、公开 Docker 镜像和自动下载脚本不应分发这些未确认再分发授权的字体：
 
 | 文件名示例 | 字体名 | 常见用途 | 授权说明 |
 |---|---|---|---|
@@ -48,7 +48,7 @@ export MD_VIEWER_DOCX_FONT_DIRS="/path/to/font-dir"
 | `simkai.ttf` | 楷体_GB2312 | `official` 二级标题 | Windows 系统字体，需遵循 Microsoft 授权 |
 | `FZXBSJW.TTF` | 方正小标宋简体 | 公文标题 | 需遵循方正字库授权 |
 
-不要把未确认授权的商业字体提交到开源仓库。推荐在私有部署环境中通过 Docker volume 或环境变量挂载。
+不要把未确认授权的商业字体提交到开源仓库。推荐在私有部署环境中通过 Docker volume 或环境变量挂载，并把私有字体目录加入 `.gitignore`。
 
 ## Docker 挂载示例
 

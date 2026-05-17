@@ -14,3 +14,5 @@ dist/
 build/
 renderers/dist/
 .env
+fonts/private/
+.DS_Store

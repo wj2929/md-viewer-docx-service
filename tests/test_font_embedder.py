@@ -1,3 +1,5 @@
+import zipfile
+
 from docx import Document
 
 from app.font_embedder import embed_fonts_if_requested
@@ -42,3 +44,27 @@ def test_embed_fonts_uses_env_font_paths_by_default(tmp_path, monkeypatch):
     import zipfile
     with zipfile.ZipFile(doc_path) as zf:
         assert "word/fonts/CustomCjk.ttf" in zf.namelist()
+
+
+def test_embed_fonts_writes_all_available_font_files(tmp_path):
+    first_font = tmp_path / "FirstCjk.ttf"
+    second_font = tmp_path / "SecondCjk.otf"
+    first_font.write_bytes(b"first-font-bytes")
+    second_font.write_bytes(b"second-font-bytes")
+
+    doc_path = tmp_path / "multi-font.docx"
+    doc = Document()
+    doc.add_paragraph("multiple fonts")
+    doc.save(doc_path)
+
+    warnings = embed_fonts_if_requested(
+        str(doc_path),
+        True,
+        font_paths=[str(first_font), str(second_font)],
+    )
+
+    assert warnings == []
+    with zipfile.ZipFile(doc_path) as zf:
+        names = zf.namelist()
+    assert "word/fonts/FirstCjk.ttf" in names
+    assert "word/fonts/SecondCjk.otf" in names

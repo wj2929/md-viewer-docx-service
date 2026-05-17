@@ -1,17 +1,55 @@
+import json
+import io
+import os
+import shutil
+import subprocess
 import zipfile
+from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 from docx import Document
 from lxml import etree
 
+from app.image_injector import ImageData, inject_images
 from app.generator import generate_docx_from_content
 
 
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+NON_PREVIEW_STYLES = ("standard", "official", "internal", "report")
+FORMAL_STYLES = ("official", "internal", "report")
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "non_preview_styles"
+FIXTURE_NAMES = (
+    "simple.md",
+    "headings-h1-h6.md",
+    "nested-lists.md",
+    "official-document.md",
+    "internal-notice.md",
+    "report-with-charts.md",
+    "wide-table.md",
+    "image-layout.md",
+)
+TABLE_FIXTURES = {
+    "simple.md",
+    "internal-notice.md",
+    "report-with-charts.md",
+    "wide-table.md",
+    "image-layout.md",
+}
 
 
 def _xml_tree(path):
     with zipfile.ZipFile(path) as zf:
         return etree.parse(zf.open("word/document.xml"))
+
+
+def _word_xml_text(path):
+    with zipfile.ZipFile(path) as zf:
+        return "\n".join(
+            zf.read(name).decode("utf-8", errors="ignore")
+            for name in zf.namelist()
+            if name.startswith("word/") and name.endswith(".xml")
+        )
 
 
 def _fills(path):
@@ -34,6 +72,163 @@ def _paragraph_by_text(path, text):
     )
     assert matches, f"paragraph not found: {text}"
     return matches[0]
+
+
+def _fixture_text(name):
+    return (FIXTURE_DIR / name).read_text(encoding="utf-8")
+
+
+def test_non_preview_fixture_matrix_is_available():
+    assert sorted(path.name for path in FIXTURE_DIR.glob("*.md")) == sorted(FIXTURE_NAMES)
+    for name in FIXTURE_NAMES:
+        text = _fixture_text(name)
+        assert text.startswith("# "), name
+        assert len(text.strip()) > 20, name
+
+
+@pytest.mark.parametrize("style", NON_PREVIEW_STYLES)
+@pytest.mark.parametrize("fixture_name", FIXTURE_NAMES)
+def test_non_preview_fixture_matrix_generates_structural_docx(tmp_path, style, fixture_name):
+    out_path = tmp_path / f"{style}-{fixture_name.replace('.md', '.docx')}"
+
+    generate_docx_from_content(
+        content=_fixture_text(fixture_name),
+        output_path=str(out_path),
+        style=style,
+    )
+
+    with zipfile.ZipFile(out_path) as zf:
+        names = set(zf.namelist())
+    assert "word/document.xml" in names
+    assert "word/styles.xml" in names
+
+    doc = Document(out_path)
+    assert doc.paragraphs or doc.tables
+    assert round(doc.sections[0].page_width.cm, 1) == 21.0
+    assert round(doc.sections[0].page_height.cm, 1) == 29.7
+
+    xml = _word_xml_text(out_path)
+    if style in FORMAL_STYLES:
+        assert "由 MD Viewer 生成" not in xml
+
+    if fixture_name in TABLE_FIXTURES:
+        tree = _xml_tree(out_path)
+        assert tree.xpath("//w:tbl", namespaces=NS), fixture_name
+        for row in tree.xpath("//w:tbl/w:tr[1]", namespaces=NS):
+            assert row.xpath("./w:trPr/w:tblHeader", namespaces=NS), fixture_name
+
+
+def test_official_fixture_preserves_h5_heading_and_list_numbering(tmp_path):
+    out_path = tmp_path / "official-document.docx"
+
+    generate_docx_from_content(
+        content=_fixture_text("official-document.md"),
+        output_path=str(out_path),
+        style="official",
+    )
+
+    xml = _word_xml_text(out_path)
+    assert 'w:pStyle w:val="Heading5"' in xml
+    assert 'w:eastAsia="仿宋_GB2312"' in xml
+
+    list_out = tmp_path / "official-nested-list.docx"
+    generate_docx_from_content(
+        content=_fixture_text("nested-lists.md"),
+        output_path=str(list_out),
+        style="official",
+    )
+    texts = [p.text.strip() for p in Document(list_out).paragraphs]
+    assert "1.  第一项" in texts
+    assert "1.  第一项子项" in texts
+    assert "2.  第二项" in texts
+
+
+def test_non_preview_fixture_image_placeholders_are_injected(tmp_path, small_png_base64):
+    placeholder_id = "mdv__chart__a0b1c2d3__"
+    out_path = tmp_path / "image-layout.docx"
+
+    generate_docx_from_content(
+        content=_fixture_text("image-layout.md"),
+        output_path=str(out_path),
+        style="report",
+    )
+    injected = inject_images(
+        str(out_path),
+        {placeholder_id: ImageData(placeholder_id, small_png_base64)},
+        style="report",
+    )
+
+    assert injected == 2
+    xml = _word_xml_text(out_path)
+    assert placeholder_id not in xml
+    assert "<w:drawing>" in xml
+
+
+def test_convert_warning_header_uses_non_preview_fixture(client):
+    with patch("app.main._font_status_by_style", return_value={
+        "official": {
+            "仿宋_GB2312": {
+                "status": "fallback",
+                "resolved": "Noto Sans CJK SC",
+                "fallback": "Noto Sans CJK SC",
+                "embeddable": True,
+            }
+        }
+    }):
+        resp = client.post("/convert", json={
+            "markdown": _fixture_text("official-document.md"),
+            "style": "official",
+        })
+
+    assert resp.status_code == 200
+    warnings = json.loads(resp.headers["x-convert-warnings"])
+    assert any("仿宋_GB2312" in warning and "Noto Sans CJK SC" in warning for warning in warnings)
+    assert "由 MD Viewer 生成" not in _word_xml_text_from_bytes(resp.content)
+
+
+def _word_xml_text_from_bytes(docx_bytes):
+    with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+        return "\n".join(
+            zf.read(name).decode("utf-8", errors="ignore")
+            for name in zf.namelist()
+            if name.startswith("word/") and name.endswith(".xml")
+        )
+
+
+def test_non_preview_official_fixture_converts_to_a4_pdf_when_tools_available(tmp_path):
+    soffice = shutil.which("soffice") or (
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+        if os.path.exists("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+        else None
+    )
+    pdfinfo = shutil.which("pdfinfo")
+    if not soffice or not pdfinfo:
+        pytest.skip("soffice/pdfinfo not available")
+
+    out_path = tmp_path / "official-document.docx"
+    generate_docx_from_content(
+        content=_fixture_text("official-document.md"),
+        output_path=str(out_path),
+        style="official",
+    )
+
+    subprocess.run(
+        [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path), str(out_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    result = subprocess.run(
+        [pdfinfo, str(tmp_path / "official-document.pdf")],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert "Pages:" in result.stdout
+    assert "A4" in result.stdout or "595." in result.stdout
 
 
 def test_non_preview_styles_use_a4_page_size(tmp_path):
@@ -114,6 +309,19 @@ def test_standard_table_has_header_fill_and_cell_margins(tmp_path):
     body_run = next(run for run in doc.tables[0].cell(1, 0).paragraphs[0].runs if run.text)
     assert header_run.font.size.pt == 9.5
     assert body_run.font.size.pt == 9.5
+
+
+def test_non_preview_table_header_repeats_across_pages(tmp_path):
+    for style in ("standard", "official", "internal", "report"):
+        out_path = tmp_path / f"{style}-repeat-header.docx"
+        generate_docx_from_content(
+            content="# 标题\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |",
+            output_path=str(out_path),
+            style=style,
+        )
+
+        first_row = _xml_tree(out_path).xpath("//w:tbl[1]/w:tr[1]", namespaces=NS)[0]
+        assert first_row.xpath("./w:trPr/w:tblHeader", namespaces=NS), style
 
 
 def test_official_table_does_not_use_web_header_fill(tmp_path):
