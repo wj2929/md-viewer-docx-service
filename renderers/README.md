@@ -51,14 +51,38 @@ assets/
 
 | 字段 | 说明 |
 |---|---|
-| `schemaVersion` | renderer 契约版本，当前服务支持 `1.0` |
+| `schemaVersion` | renderer 契约版本，当前服务支持 `1.x` 和 `2.x` |
 | `version` | renderer artifact 版本 |
 | `entryHtml` | 入口 HTML，通常为 `server-render.html` |
 | `assetsDir` | 静态资源目录，通常为 `assets` |
-| `supportedCharts` | browser artifact 支持截图的图表类型 |
+| `supportedCharts` | browser artifact 支持截图的图表类型，保留给旧客户端和诊断 UI |
 | `minDocxServiceVersion` | artifact 要求的最低 DOCX 服务版本 |
+| `renderers` | schema 2.0 新增，完整 renderer 能力、selector 与替换策略清单 |
 
 `/readyz` 会校验 artifact 是否存在、schema 是否兼容、入口 HTML 与 assets 目录是否完整。
+
+## Renderer 能力矩阵
+
+当前 full renderer artifact 目标支持：
+
+| 类型 | fence / 引用 | 说明 |
+|---|---|---|
+| Mermaid | `mermaid` | 本地浏览器渲染 |
+| KaTeX | `$...$`、`$$...$$` | 公式截图 |
+| ECharts | `echarts` | SVG/DOM 截图 |
+| Markmap | `markmap` | SVG 截图 |
+| Graphviz | `graphviz`、`dot` | WASM/SVG |
+| DrawIO | `drawio`、`dio` | DOM 渲染后截图 |
+| Infographic | `infographic` | SVG 渲染 |
+| Excalidraw | `excalidraw`、`.excalidraw` | 代码块和 bundle 文件引用 |
+| PlantUML | `plantuml`、`puml` | 由服务后处理或配置的 PlantUML 服务渲染 |
+| Vega-Lite | `vega-lite`、`vegalite` | 仅允许内联数据，阻止外部 `data.url` |
+| D2 | `d2` | 本地离线 SVG 渲染 |
+| BPMN | `bpmn`、`.bpmn` | fenced XML 和 bundle 文件引用 |
+| WaveDrom | `wavedrom` | 本地 JS 渲染 |
+| C4-PlantUML | `c4`、`c4plantuml` | 复用 PlantUML 链路 |
+
+schema 2.0 下，服务会比较 manifest `renderers[]` 与 Python allowlist。manifest 声明但 allowlist 未允许的 renderer 不会被静默启用；allowlist 中存在但 manifest 缺失的 renderer 也会在 `/readyz.rendererWarnings` 中提示。
 
 ## 本地生成 artifact
 

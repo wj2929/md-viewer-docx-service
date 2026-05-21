@@ -6,6 +6,45 @@
 
 ---
 
+## [0.2.0] - 2026-05-21
+
+> 状态：配套 MD Viewer v2.2.0
+> 类型：RendererPlugin schema 2.0 适配、服务端 full fidelity 图表导出增强
+
+### 新增
+
+- 新增 renderer artifact schema `2.x` 兼容能力，支持读取 `renderers[]` 能力清单。
+- 新增 DOCX 服务端 allowlist，覆盖 Mermaid、KaTeX、Excalidraw、DrawIO、ECharts、Markmap、Graphviz、Infographic、PlantUML、Vega-Lite、D2、BPMN、WaveDrom、C4-PlantUML。
+- 新增 `/readyz.rendererWarnings`，当 manifest 与服务 allowlist 不一致或 schema minor 版本较新时返回诊断信息。
+- 新增 BPMN 文件引用识别，支持 Markdown 图片语法引用 `.bpmn` 后由 full fidelity 渲染链路替换为图片。
+
+### 改进
+
+- full fidelity 渲染 payload 启用 MD Viewer v2.2.0 新增的 RendererPlugin 图表类型。
+- 图表替换逻辑优先使用 renderer 返回的 `blockId`，减少同类型多图表文档中因 `sourceIndex` 偏移导致的替换错误。
+- 保留 `rendererSupportedCharts` 作为旧客户端兼容字段，同时在 schema 2.0 下使用更完整的 renderer manifest 做能力判断。
+- README 和 renderer artifact 文档补充 schema 2.0、allowlist、RendererPlugin 能力矩阵和 `/readyz` 示例。
+
+### 修复
+
+- 修复新增 RendererPlugin 图表在服务端 DOCX full fidelity 导出时可能退化为源码的问题。
+- 修复 BPMN 代码块与 `.bpmn` 文件引用混排时图片替换顺序不稳定的问题。
+- 修复 manifest 声明新图表但 DOCX 服务未显式允许时静默启用的风险。
+
+### 测试
+
+- 新增 renderer artifact schema 2.0、allowlist warning、schema minor warning 覆盖。
+- 新增 Vega-Lite、D2、BPMN、WaveDrom、C4-PlantUML 的 full fidelity 计数与替换测试。
+- 最近一次验证通过：
+  - `uv run --python 3.12 --with-requirements requirements.txt python -m pytest`
+
+### 兼容性说明
+
+- 服务版本升至 `0.2.0`，仍兼容 schema `1.x` artifact。
+- 推荐与 MD Viewer v2.2.0 及其 server renderer artifact 同步部署。
+
+---
+
 ## [0.1.0] - 2026-05-10
 
 > 状态：开源准备中  

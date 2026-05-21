@@ -8,7 +8,7 @@
 
 - 支持 Markdown 到 DOCX：标题、段落、列表、表格、代码块、图片、页脚和多种文档样式。
 - 支持客户端预渲染图片：MD Viewer 可先把图表渲染为 PNG，再由服务注入 DOCX，适合本地桌面场景。
-- 支持服务端完整渲染：full 镜像可直接消费 Markdown / URL / bundle，并对 Mermaid、KaTeX、ECharts、Markmap、Graphviz、DrawIO、Infographic、Excalidraw 等内容截图后导出。
+- 支持服务端完整渲染：full 镜像可直接消费 Markdown / URL / bundle，并对 Mermaid、KaTeX、ECharts、Markmap、Graphviz、DrawIO、Infographic、Excalidraw、Vega-Lite、D2、BPMN、WaveDrom、C4-PlantUML 等内容截图后导出。
 - 支持 PlantUML / PUML：服务端通过 PlantUML Server 渲染为图片后注入 DOCX。
 - 支持字体嵌入：可按授权情况配置本地字体路径，服务会在无法嵌入时降级并返回 warning。
 - 支持 slim / full 两类镜像：本地轻量导出和服务端高保真导出可以分开部署。
@@ -176,9 +176,25 @@ X-API-Key: your-api-key
 {
   "fullFidelityRenderSupported": true,
   "rendererHealth": "ok",
-  "rendererArtifactVersion": "1.7.0",
-  "rendererSchemaVersion": "1.0",
-  "rendererSupportedCharts": ["mermaid", "katex", "excalidraw", "drawio", "echarts", "markmap", "graphviz", "infographic"],
+  "rendererArtifactVersion": "2.2.0",
+  "rendererSchemaVersion": "2.0",
+  "rendererSupportedCharts": [
+    "mermaid",
+    "katex",
+    "excalidraw",
+    "drawio",
+    "echarts",
+    "markmap",
+    "graphviz",
+    "infographic",
+    "plantuml",
+    "vega-lite",
+    "d2",
+    "bpmn",
+    "wavedrom",
+    "c4plantuml"
+  ],
+  "rendererWarnings": [],
   "renderConcurrency": 1,
   "sourceUrlPolicy": "local-friendly",
   "renderNetworkPolicy": "local-friendly"
@@ -187,7 +203,7 @@ X-API-Key: your-api-key
 
 如果 artifact 缺失或版本不兼容，返回 `503`，并包含 `rendererError`。
 
-注意：`rendererSupportedCharts` 只表示浏览器 artifact 截图能力。PlantUML / PUML 由 DOCX 服务后处理渲染，所以不会出现在该字段中。
+`rendererSchemaVersion` 当前支持 `1.x` 和 `2.x`。`2.x` artifact 会额外提供 `renderers[]` 能力清单，服务仍保留 Python allowlist 作为安全边界；allowlist 与 manifest 不一致时会在 `rendererWarnings` 中报告。`rendererSupportedCharts` 是兼容旧客户端的简化列表。
 
 ## `POST /convert`
 

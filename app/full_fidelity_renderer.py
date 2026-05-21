@@ -12,13 +12,29 @@ from app.render_runtime import assert_output_path_inside
 
 class RenderedImage(BaseModel):
     id: str
-    type: Literal["mermaid", "katex", "echarts", "markmap", "graphviz", "excalidraw", "drawio", "infographic", "plantuml"]
+    type: Literal[
+        "mermaid",
+        "katex",
+        "echarts",
+        "markmap",
+        "graphviz",
+        "excalidraw",
+        "drawio",
+        "infographic",
+        "plantuml",
+        "vega-lite",
+        "d2",
+        "bpmn",
+        "wavedrom",
+        "c4plantuml",
+    ]
     pngPath: str
     widthPx: int = Field(..., ge=1)
     heightPx: int = Field(..., ge=1)
     widthCm: float = Field(..., gt=0)
     durationMs: int = Field(default=0, ge=0)
     sourceIndex: int | None = Field(default=None, ge=0)
+    blockId: str | None = None
 
 
 class RenderStats(BaseModel):
@@ -56,10 +72,11 @@ class FullFidelityRenderResult(BaseModel):
 
 
 SUPPORTED_BLOCK_RE = re.compile(
-    r"^```(?:mermaid|echarts|markmap|graphviz|dot|excalidraw|excalidraw-json|drawio|dio|infographic)\b[^\n]*\n[\s\S]*?^```\s*$",
+    r"^```(?:mermaid|echarts|markmap|graphviz|dot|excalidraw|excalidraw-json|drawio|dio|infographic|vega-lite|vegalite|d2|bpmn|wavedrom|c4|c4plantuml)\b[^\n]*\n[\s\S]*?^```\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 EXCALIDRAW_REF_RE = re.compile(r"!\[[^\]\n]*\]\(\s*[^)\s]+\.excalidraw(?:[?#][^)\s]*)?\s*\)", re.IGNORECASE)
+BPMN_REF_RE = re.compile(r"!\[[^\]\n]*\]\(\s*[^)\s]+\.bpmn(?:[?#][^)\s]*)?\s*\)", re.IGNORECASE)
 BLOCK_MATH_RE = re.compile(r"\$\$\n?[\s\S]*?\n?\$\$", re.MULTILINE)
 INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+)\$(?!\$)")
 
@@ -70,6 +87,7 @@ def _count_supported_blocks(markdown: str) -> int:
     return (
         len(SUPPORTED_BLOCK_RE.findall(markdown))
         + len(EXCALIDRAW_REF_RE.findall(markdown))
+        + len(BPMN_REF_RE.findall(markdown))
         + len(BLOCK_MATH_RE.findall(without_fences))
         + len(INLINE_MATH_RE.findall(without_block_math))
     )
@@ -128,7 +146,22 @@ def render_markdown_full_fidelity(
         "markdownFilePath": markdown_file_path,
         "resources": resources or [],
         "theme": "light",
-        "enabledRenderers": ["mermaid", "katex", "excalidraw", "drawio", "echarts", "markmap", "graphviz", "infographic"],
+        "enabledRenderers": [
+            "mermaid",
+            "katex",
+            "excalidraw",
+            "drawio",
+            "echarts",
+            "markmap",
+            "graphviz",
+            "infographic",
+            "plantuml",
+            "vega-lite",
+            "d2",
+            "bpmn",
+            "wavedrom",
+            "c4plantuml",
+        ],
         "networkPolicy": os.environ.get("MDV_RENDER_NETWORK_POLICY", "local-friendly"),
         "allowlistHosts": [
             host.strip()

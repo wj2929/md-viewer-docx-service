@@ -103,6 +103,46 @@ class TestReadyz:
         assert data["rendererSchemaVersion"] == "1.0"
         assert data["rendererSupportedCharts"] == ["mermaid"]
 
+    def test_readyz_reports_schema_2_renderer_plugins_without_allowlist_warnings(self, client, monkeypatch, tmp_path):
+        artifact_dir = tmp_path / "server-render"
+        assets_dir = artifact_dir / "assets"
+        assets_dir.mkdir(parents=True)
+        (artifact_dir / "server-render.html").write_text("<html></html>", encoding="utf-8")
+        (artifact_dir / "manifest.json").write_text(json.dumps({
+            "name": "@md-viewer/server-renderer",
+            "version": "2.1.0",
+            "schemaVersion": "2.0",
+            "entryHtml": "server-render.html",
+            "assetsDir": "assets",
+            "supportedCharts": ["mermaid", "vega-lite", "d2", "bpmn", "wavedrom", "c4plantuml"],
+            "minDocxServiceVersion": "0.2.0",
+            "renderers": [
+                {
+                    "type": "mermaid",
+                    "displayName": "Mermaid",
+                    "capabilities": {"docxService": {"state": "supported"}},
+                },
+                {
+                    "type": "vega-lite",
+                    "displayName": "Vega-Lite",
+                    "capabilities": {"docxService": {"state": "supported"}},
+                },
+                {"type": "d2", "displayName": "D2", "capabilities": {"docxService": {"state": "supported"}}},
+                {"type": "bpmn", "displayName": "BPMN", "capabilities": {"docxService": {"state": "supported"}}},
+                {"type": "wavedrom", "displayName": "WaveDrom", "capabilities": {"docxService": {"state": "supported"}}},
+                {"type": "c4plantuml", "displayName": "C4-PlantUML", "capabilities": {"docxService": {"state": "supported"}}},
+            ],
+        }), encoding="utf-8")
+        monkeypatch.setenv("MDV_RENDER_ARTIFACT_DIR", str(artifact_dir))
+
+        resp = client.get("/readyz")
+        data = resp.json()
+
+        assert resp.status_code == 200
+        assert data["rendererSchemaVersion"] == "2.0"
+        assert data["rendererSupportedCharts"] == ["mermaid", "vega-lite", "d2", "bpmn", "wavedrom", "c4plantuml"]
+        assert not any(warning["code"] == "RENDERER_MANIFEST_NOT_ALLOWLISTED" for warning in data["rendererWarnings"])
+
 
 class TestConvertPlainText:
     def test_minimal_markdown(self, client):

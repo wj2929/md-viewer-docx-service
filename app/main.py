@@ -39,7 +39,7 @@ from app.source_models import ConvertSourceRequest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 MIN_CLIENT_VERSION = "1.7.0"
 KATEX_WIDTH_CM_PER_CSS_PX = 0.018
 KATEX_MIN_WIDTH_CM = 2.8
@@ -285,8 +285,60 @@ MARKMAP_BLOCK_PATTERN = re.compile(r"^```markmap\b[^\n]*\n[\s\S]*?^```\s*$", re.
 GRAPHVIZ_BLOCK_PATTERN = re.compile(r"^```(?:graphviz|dot)\b[^\n]*\n[\s\S]*?^```\s*$", re.IGNORECASE | re.MULTILINE)
 INFOGRAPHIC_BLOCK_PATTERN = re.compile(r"^```infographic\b[^\n]*\n[\s\S]*?^```\s*$", re.IGNORECASE | re.MULTILINE)
 PLANTUML_BLOCK_PATTERN = re.compile(r"^```(?:plantuml|puml)\b[^\n]*\n[\s\S]*?^```\s*$", re.IGNORECASE | re.MULTILINE)
+VEGA_LITE_BLOCK_PATTERN = re.compile(r"^```(?:vega-lite|vegalite)\b[^\n]*\n[\s\S]*?^```\s*$", re.IGNORECASE | re.MULTILINE)
+D2_BLOCK_PATTERN = re.compile(r"^```d2\b[^\n]*\n[\s\S]*?^```\s*$", re.IGNORECASE | re.MULTILINE)
+BPMN_BLOCK_PATTERN = re.compile(r"^```bpmn\b[^\n]*\n[\s\S]*?^```\s*$", re.IGNORECASE | re.MULTILINE)
+BPMN_FILE_REF_PATTERN = re.compile(r"!\[[^\]\n]*\]\(\s*[^)\s]+\.bpmn(?:[?#][^)\s]*)?\s*\)", re.IGNORECASE)
+WAVEDROM_BLOCK_PATTERN = re.compile(r"^```wavedrom\b[^\n]*\n[\s\S]*?^```\s*$", re.IGNORECASE | re.MULTILINE)
+C4PLANTUML_BLOCK_PATTERN = re.compile(r"^```(?:c4|c4plantuml)\b[^\n]*\n[\s\S]*?^```\s*$", re.IGNORECASE | re.MULTILINE)
 KATEX_BLOCK_PATTERN = re.compile(r"\$\$\n?([\s\S]*?)\n?\$\$", re.MULTILINE)
 KATEX_INLINE_PATTERN = re.compile(r"(?<!\$)\$([^$\n]+)\$(?!\$)")
+FULL_FIDELITY_FENCE_PATTERN = re.compile(
+    r"^```(?P<lang>[\w-]+)\b[^\n]*\n(?P<code>[\s\S]*?)^```\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+FULL_FIDELITY_LANGUAGE_TYPES = {
+    "mermaid": ("mermaid", "mermaid"),
+    "echarts": ("echarts", "echarts"),
+    "markmap": ("markmap", "markmap"),
+    "graphviz": ("graphviz", "graphviz"),
+    "dot": ("graphviz", "graphviz"),
+    "drawio": ("drawio", "drawio"),
+    "dio": ("drawio", "drawio"),
+    "infographic": ("infographic", "infographic"),
+    "plantuml": ("plantuml", "plantuml"),
+    "puml": ("plantuml", "plantuml"),
+    "excalidraw": ("excalidraw", "excalidraw"),
+    "excalidraw-json": ("excalidraw", "excalidraw"),
+    "vega-lite": ("vega-lite", "vega-lite"),
+    "vegalite": ("vega-lite", "vega-lite"),
+    "d2": ("d2", "d2"),
+    "bpmn": ("bpmn", "bpmn"),
+    "wavedrom": ("wavedrom", "wavedrom"),
+    "c4": ("c4plantuml", "c4plantuml"),
+    "c4plantuml": ("c4plantuml", "c4plantuml"),
+}
+FULL_FIDELITY_FILE_REF_TYPES = {
+    "excalidraw": ("excalidraw", "excalidraw"),
+    "bpmn": ("bpmn", "bpmn"),
+}
+
+FULL_FIDELITY_IMAGE_TYPES = {
+    "mermaid",
+    "katex",
+    "excalidraw",
+    "drawio",
+    "echarts",
+    "markmap",
+    "graphviz",
+    "infographic",
+    "plantuml",
+    "vega-lite",
+    "d2",
+    "bpmn",
+    "wavedrom",
+    "c4plantuml",
+}
 
 
 def _get_field(value, field: str, default=None):
@@ -328,6 +380,9 @@ def _full_fidelity_images_to_base64(images) -> list[dict]:
         source_index = _get_field(image, "sourceIndex")
         if source_index is not None:
             rendered_image["sourceIndex"] = source_index
+        block_id = _get_field(image, "blockId")
+        if block_id:
+            rendered_image["blockId"] = block_id
         rendered_images.append(rendered_image)
     return rendered_images
 
@@ -340,16 +395,168 @@ def _replace_nth_match(pattern: re.Pattern, text: str, replacement: str, index: 
     return f"{text[:match.start()]}{replacement}{text[match.end():]}"
 
 
+def _replace_nth_ordered_match(patterns: list[re.Pattern], text: str, replacement: str, index: int) -> str:
+    matches = []
+    for pattern in patterns:
+        matches.extend(pattern.finditer(text))
+    matches.sort(key=lambda match: match.start())
+    if index < 0 or index >= len(matches):
+        return text
+    match = matches[index]
+    return f"{text[:match.start()]}{replacement}{text[match.end():]}"
+
+
+def _stable_hash(value: str) -> str:
+    hash_value = 0x811C9DC5
+    utf16_units = memoryview(value.encode("utf-16-le")).cast("H")
+    for code_unit in utf16_units:
+        hash_value ^= int(code_unit)
+        hash_value = (hash_value * 0x01000193) & 0xFFFFFFFF
+    return f"{hash_value:08x}"
+
+
+def _create_full_fidelity_block_id(
+    *,
+    renderer_type: str,
+    source_kind: str,
+    canonical_language: str,
+    start_offset: int,
+    end_offset: int,
+    source: str,
+    resolved_path: str | None = None,
+) -> tuple[str, str]:
+    source_hash = _stable_hash(source)
+    identity_parts = [
+        renderer_type,
+        source_kind,
+        canonical_language.strip().lower(),
+        str(start_offset),
+        str(end_offset),
+        source_hash,
+        (resolved_path or "").replace("\\", "/"),
+    ]
+    identity_hash = _stable_hash("\n".join(identity_parts))
+    return f"mdv-{renderer_type}-{identity_hash}", source_hash
+
+
+def _clean_markdown_ref_path(ref_path: str) -> str:
+    clean = ref_path.strip().removeprefix("<").removesuffix(">")
+    return re.split(r"[?#]", clean.replace("\\", "/"), maxsplit=1)[0] or ref_path
+
+
+def _is_inside_ranges(index: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(start <= index < end for start, end in ranges)
+
+
+def _collect_full_fidelity_source_locators(markdown: str) -> list[dict]:
+    candidates: list[dict] = []
+    counters: dict[str, int] = {}
+    fenced_ranges: list[tuple[int, int]] = []
+
+    for match in FULL_FIDELITY_FENCE_PATTERN.finditer(markdown):
+        fenced_ranges.append((match.start(), match.end()))
+        raw_language = (match.group("lang") or "").strip().lower()
+        resolved = FULL_FIDELITY_LANGUAGE_TYPES.get(raw_language)
+        if not resolved:
+            continue
+
+        renderer_type, canonical_language = resolved
+        source = match.group("code")
+        candidates.append({
+            "type": renderer_type,
+            "sourceKind": "fence",
+            "canonicalLanguage": canonical_language,
+            "startOffset": match.start(),
+            "endOffset": match.end(),
+            "source": source,
+            "resolvedPath": None,
+        })
+
+    for pattern, extension in (
+        (EXCALIDRAW_FILE_REF_PATTERN, "excalidraw"),
+        (BPMN_FILE_REF_PATTERN, "bpmn"),
+    ):
+        resolved = FULL_FIDELITY_FILE_REF_TYPES[extension]
+        renderer_type, canonical_language = resolved
+        for match in pattern.finditer(markdown):
+            if _is_inside_ranges(match.start(), fenced_ranges):
+                continue
+            ref_match = re.search(r"\(\s*(?:<([^>\n]+)>|([^\s)]+))", match.group(0))
+            ref_path = (ref_match.group(1) or ref_match.group(2)) if ref_match else ""
+            candidates.append({
+                "type": renderer_type,
+                "sourceKind": "imageRef",
+                "canonicalLanguage": canonical_language,
+                "startOffset": match.start(),
+                "endOffset": match.end(),
+                "source": match.group(0),
+                "resolvedPath": _clean_markdown_ref_path(ref_path),
+            })
+
+    locators: list[dict] = []
+    for candidate in sorted(candidates, key=lambda item: item["startOffset"]):
+        renderer_type = candidate["type"]
+        source_index = counters.get(renderer_type, 0)
+        counters[renderer_type] = source_index + 1
+        block_id, source_hash = _create_full_fidelity_block_id(
+            renderer_type=renderer_type,
+            source_kind=candidate["sourceKind"],
+            canonical_language=candidate["canonicalLanguage"],
+            start_offset=candidate["startOffset"],
+            end_offset=candidate["endOffset"],
+            source=candidate["source"],
+            resolved_path=candidate["resolvedPath"],
+        )
+        locator = {
+            "blockId": block_id,
+            "type": renderer_type,
+            "sourceKind": candidate["sourceKind"],
+            "canonicalLanguage": candidate["canonicalLanguage"],
+            "sourceIndex": source_index,
+            "startOffset": candidate["startOffset"],
+            "endOffset": candidate["endOffset"],
+            "sourceHash": source_hash,
+        }
+        if candidate["resolvedPath"]:
+            locator["resolvedPath"] = candidate["resolvedPath"]
+        locators.append(locator)
+
+    return locators
+
+
 def _replace_full_fidelity_chart_blocks(markdown: str, images: list[dict]) -> str:
     result = markdown
+    locators_by_block_id = {
+        locator["blockId"]: locator
+        for locator in _collect_full_fidelity_source_locators(markdown)
+    }
+    block_id_replacements = []
+    block_id_images = set()
+
+    for image in images:
+        block_id = image.get("blockId")
+        if not isinstance(block_id, str):
+            continue
+        locator = locators_by_block_id.get(block_id)
+        if not locator or locator["type"] != image.get("type"):
+            continue
+        block_id_images.add(id(image))
+        block_id_replacements.append({
+            "start": locator["startOffset"],
+            "end": locator["endOffset"],
+            "value": f"![]({image['id']})",
+        })
+
+    for replacement in sorted(block_id_replacements, key=lambda item: item["start"], reverse=True):
+        result = f"{result[:replacement['start']]}{replacement['value']}{result[replacement['end']:]}"
 
     indexed_images = [
         image for image in images
-        if isinstance(image.get("sourceIndex"), int)
+        if id(image) not in block_id_images and isinstance(image.get("sourceIndex"), int)
     ]
     for image in sorted(indexed_images, key=lambda item: item["sourceIndex"], reverse=True):
         image_type = image.get("type")
-        if image_type not in {"mermaid", "katex", "excalidraw", "drawio", "echarts", "markmap", "graphviz", "infographic", "plantuml"}:
+        if image_type not in FULL_FIDELITY_IMAGE_TYPES:
             continue
         placeholder = f"![]({image['id']})"
         source_index = image["sourceIndex"]
@@ -367,12 +574,24 @@ def _replace_full_fidelity_chart_blocks(markdown: str, images: list[dict]) -> st
             result = _replace_nth_match(INFOGRAPHIC_BLOCK_PATTERN, result, placeholder, source_index)
         elif image_type == "plantuml":
             result = _replace_nth_match(PLANTUML_BLOCK_PATTERN, result, placeholder, source_index)
+        elif image_type == "vega-lite":
+            result = _replace_nth_match(VEGA_LITE_BLOCK_PATTERN, result, placeholder, source_index)
+        elif image_type == "d2":
+            result = _replace_nth_match(D2_BLOCK_PATTERN, result, placeholder, source_index)
+        elif image_type == "bpmn":
+            result = _replace_nth_ordered_match([BPMN_BLOCK_PATTERN, BPMN_FILE_REF_PATTERN], result, placeholder, source_index)
+        elif image_type == "wavedrom":
+            result = _replace_nth_match(WAVEDROM_BLOCK_PATTERN, result, placeholder, source_index)
+        elif image_type == "c4plantuml":
+            result = _replace_nth_match(C4PLANTUML_BLOCK_PATTERN, result, placeholder, source_index)
 
     for image in images:
+        if id(image) in block_id_images:
+            continue
         if isinstance(image.get("sourceIndex"), int):
             continue
         image_type = image.get("type")
-        if image_type not in {"mermaid", "katex", "excalidraw", "drawio", "echarts", "markmap", "graphviz", "infographic", "plantuml"}:
+        if image_type not in FULL_FIDELITY_IMAGE_TYPES:
             continue
         placeholder = f"![]({image['id']})"
         if image_type == "mermaid":
@@ -393,6 +612,16 @@ def _replace_full_fidelity_chart_blocks(markdown: str, images: list[dict]) -> st
             result, replaced = EXCALIDRAW_BLOCK_PATTERN.subn(placeholder, result, count=1)
             if replaced == 0:
                 result, _ = EXCALIDRAW_FILE_REF_PATTERN.subn(placeholder, result, count=1)
+        elif image_type == "vega-lite":
+            result, _ = VEGA_LITE_BLOCK_PATTERN.subn(placeholder, result, count=1)
+        elif image_type == "d2":
+            result, _ = D2_BLOCK_PATTERN.subn(placeholder, result, count=1)
+        elif image_type == "bpmn":
+            result = _replace_nth_ordered_match([BPMN_BLOCK_PATTERN, BPMN_FILE_REF_PATTERN], result, placeholder, 0)
+        elif image_type == "wavedrom":
+            result, _ = WAVEDROM_BLOCK_PATTERN.subn(placeholder, result, count=1)
+        elif image_type == "c4plantuml":
+            result, _ = C4PLANTUML_BLOCK_PATTERN.subn(placeholder, result, count=1)
         else:
             result, replaced = KATEX_BLOCK_PATTERN.subn(placeholder, result, count=1)
             if replaced == 0:
@@ -455,6 +684,7 @@ async def readyz():
         "rendererArtifactVersion": info.version,
         "rendererSchemaVersion": info.schemaVersion,
         "rendererSupportedCharts": info.supportedCharts,
+        "rendererWarnings": info.rendererWarnings,
         **common,
     }
 

@@ -20,7 +20,7 @@ def test_renderer_parses_cli_json(tmp_path):
         "images": [
             {
                 "id": "mdv__chart__aabbccdd__",
-                "type": "mermaid",
+                "type": "vega-lite",
                 "pngPath": str(image),
                 "widthPx": 800,
                 "heightPx": 400,
@@ -86,7 +86,22 @@ def test_renderer_passes_page_timeout_before_subprocess_deadline(tmp_path):
 
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     assert payload["timeoutMs"] == 55000
-    assert payload["enabledRenderers"] == ["mermaid", "katex", "excalidraw", "drawio", "echarts", "markmap", "graphviz", "infographic"]
+    assert payload["enabledRenderers"] == [
+        "mermaid",
+        "katex",
+        "excalidraw",
+        "drawio",
+        "echarts",
+        "markmap",
+        "graphviz",
+        "infographic",
+        "plantuml",
+        "vega-lite",
+        "d2",
+        "bpmn",
+        "wavedrom",
+        "c4plantuml",
+    ]
     assert payload["networkPolicy"] == "local-friendly"
 
 
@@ -167,6 +182,35 @@ def test_renderer_timeout_count_excludes_plantuml_postprocess_blocks(tmp_path):
     assert result.status == "timeout"
     assert result.stats.totalBlocks == 0
     assert result.stats.failedBlocks == 0
+
+
+def test_renderer_timeout_counts_renderer_plugin_blocks(tmp_path):
+    cli = tmp_path / "fake_renderer.py"
+    cli.write_text(
+        "\n".join([
+            "import time",
+            "time.sleep(30)",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = render_markdown_full_fidelity(
+        markdown="\n\n".join([
+            "```vegalite\n{\"data\":{\"values\":[]},\"mark\":\"bar\"}\n```",
+            "```d2\na -> b\n```",
+            "```bpmn\n<definitions />\n```",
+            "```wavedrom\n{ signal: [] }\n```",
+            "```c4\n@startuml\n@enduml\n```",
+            "![流程](process.bpmn)",
+        ]),
+        renderer_cli=[sys.executable, str(cli)],
+        output_dir=tmp_path,
+        timeout_ms=1000,
+    )
+
+    assert result.status == "timeout"
+    assert result.stats.totalBlocks == 6
+    assert result.stats.failedBlocks == 6
 
 
 def test_renderer_rejects_output_paths_outside_output_dir(tmp_path):
