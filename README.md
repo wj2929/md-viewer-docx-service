@@ -489,7 +489,7 @@ docker run --rm \
   md-viewer-docx-service:latest
 ```
 
-服务会在 `/healthz.fontStatus` 中报告字体状态；导出时如果只能使用 fallback 字体，应通过 warning 提示用户实际效果可能与公文/报告预期不同。
+服务会在 `/healthz.fontStatus` 中报告字体状态；导出时如果只能使用 fallback 字体，应通过 warning 提示用户实际效果可能与公文/报告预期不同。`preview` 样式默认优先使用服务内置的 `Noto Sans CJK SC`，以保证本地和远程 Docker 导出行为一致。启用 `embedFont=true` 时，服务只会嵌入 DOCX 实际引用且能在候选字体中匹配到的字体，不会把整个系统字体目录或挂载目录打包进 DOCX。如果 warning 提示未找到匹配字体，普通用户可以关闭“嵌入字体”；需要固定跨设备字体时，应由服务管理员在 DOCX 服务端挂载授权字体，并设置 `MD_VIEWER_DOCX_FONT_DIRS` 或 `MD_VIEWER_DOCX_FONT_PATHS`。
 
 ## Docker
 

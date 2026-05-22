@@ -6,6 +6,38 @@
 
 ---
 
+## [0.2.1] - 2026-05-22
+
+> 状态：配套 MD Viewer v2.3.0
+> 类型：补丁修复，DOCX 字体嵌入体积与提示优化
+
+### 修复
+
+- 修复本地 macOS 服务在 `preview` 样式下优先引用 `PingFang SC`，但字体嵌入策略无法匹配内置字体，导致正常导出仍出现字体 warning 的问题。
+- 修复默认字体候选曾扫描 macOS 系统字体目录，可能把 `Apple Color Emoji.ttc`、`PingFang.ttc`、`Songti.ttc` 等系统字体一并写入 DOCX，造成文件体积异常膨胀的问题。
+- 修复 `embedFont=true` 时按候选目录全量嵌入字体的问题，改为只嵌入 DOCX 实际引用且服务端可匹配到的字体。
+
+### 改进
+
+- `preview` 样式默认优先使用服务内置的 `Noto Sans CJK SC`，使本地服务、Docker 本地部署和远程 Docker 服务的默认导出行为更一致。
+- 字体 warning 改为可操作提示：普通用户可关闭“嵌入字体”，需要固定跨设备字体时由服务管理员挂载授权字体，并配置 `MD_VIEWER_DOCX_FONT_DIRS` 或 `MD_VIEWER_DOCX_FONT_PATHS`。
+- 字体目录说明补充 Docker 本地和远程服务边界：服务只读取容器内置字体或显式挂载的授权字体，不默认读取宿主机系统字体目录。
+
+### 测试
+
+- 新增按需字体嵌入测试，覆盖多字体引用、未引用字体不嵌入、Noto CJK TTC 与 `Noto Sans CJK SC` 匹配、未匹配字体 warning 指引。
+- 新增 `preview` 字体选择测试，确认即使系统存在 `PingFang SC`，也优先使用服务内置可嵌入字体。
+- 最近一次验证通过：
+  - `/opt/anaconda3/bin/python3.11 -m pytest -q`，293 个用例通过。
+  - 真实 Markdown 预览样式 DOCX 导出 `warnings=[]`，仅嵌入 `NotoSansCJKsc-Regular.otf`。
+
+### 兼容性说明
+
+- 服务版本升至 `0.2.1`，推荐与 MD Viewer v2.3.0 同步部署。
+- 如果用户额外选择公文、内部材料或报告样式，并要求嵌入未随服务分发的商业/系统字体，仍需由部署方自行挂载已授权字体。
+
+---
+
 ## [0.2.0] - 2026-05-21
 
 > 状态：配套 MD Viewer v2.2.0

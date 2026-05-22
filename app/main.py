@@ -39,7 +39,7 @@ from app.source_models import ConvertSourceRequest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 MIN_CLIENT_VERSION = "1.7.0"
 KATEX_WIDTH_CM_PER_CSS_PX = 0.018
 KATEX_MIN_WIDTH_CM = 2.8

@@ -1,6 +1,6 @@
 # Fonts
 
-本目录用于存放 `md-viewer-docx-service` 在 Docker 镜像和本地开发中可扫描的字体文件。服务会用这些字体改善中文 DOCX 排版，并在调用方设置 `embedFont=true` 时尝试把可嵌入字体写入 DOCX。
+本目录用于存放 `md-viewer-docx-service` 在 Docker 镜像和本地开发中可扫描的字体文件。服务会用这些字体改善中文 DOCX 排版，并在调用方设置 `embedFont=true` 时按需把 DOCX 实际引用的匹配字体写入文件。
 
 ## 默认字体
 
@@ -17,16 +17,20 @@ RUN fc-cache -fv
 |---|---|---|---|
 | `NotoSansCJKsc-Regular.otf` | Noto Sans CJK SC | 中文排版与字体嵌入兜底 | SIL Open Font License 1.1 |
 
+`preview` 样式会优先使用该内置字体，而不是 macOS 上的 `PingFang SC` 等系统字体。这样本地服务和远程 Docker 服务生成的 DOCX 更一致，也能在 `embedFont=true` 时默认完成字体嵌入。
+
 授权文本见 `OFL.txt`。第三方声明见仓库根目录 `NOTICE.md`。
 
 ## 字体扫描顺序
 
-服务会从以下来源查找 `.ttf`、`.otf`、`.ttc` 字体：
+服务会从以下来源查找 `.ttf`、`.otf`、`.ttc` 候选字体：
 
 1. `MD_VIEWER_DOCX_FONT_PATHS` 指定的字体文件。
 2. 代码内置的候选字体路径。
 3. `MD_VIEWER_DOCX_FONT_DIRS` 指定的字体目录。
-4. 本目录、Docker 自定义字体目录、Linux Noto 字体目录、macOS 系统字体目录。
+4. 本目录、Docker 自定义字体目录、Linux Noto 字体目录。
+
+服务不会默认扫描 macOS 系统字体目录。Docker 部署时也只会读取容器内置字体或显式挂载到容器内的授权字体目录。
 
 环境变量支持冒号分隔，也兼容逗号分隔：
 
@@ -63,7 +67,8 @@ docker run --rm \
 ## 字体嵌入行为
 
 - 只有请求中设置 `embedFont=true` 时才会尝试嵌入字体。
-- 找不到可嵌入字体时，服务会保留字体名称并返回 warning，DOCX 仍会生成。
+- 服务会先读取 DOCX 内容中的字体引用，只嵌入与实际引用匹配的候选字体，避免把整个字体目录打包进 DOCX。
+- 找不到可嵌入字体时，服务会保留字体名称并返回 warning，DOCX 仍会生成。warning 会提示普通用户关闭“嵌入字体”，或提示服务管理员通过 `MD_VIEWER_DOCX_FONT_DIRS` / `MD_VIEWER_DOCX_FONT_PATHS` 挂载授权字体。
 - 字体是否能被 Word / WPS 正确识别，还受字体文件格式、Office 支持情况和字体授权位影响。
 - 服务当前采用保守策略：优先保证 DOCX 可打开，字体嵌入失败时降级并报告 warning。
 

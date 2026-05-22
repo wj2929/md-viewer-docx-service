@@ -189,6 +189,15 @@ class TestGenerateDocx:
         assert body_font
         assert mono_font
 
+    def test_preview_prefers_bundled_embeddable_font_over_macos_system_font(self, monkeypatch):
+        from app import generator
+
+        monkeypatch.setattr(generator, "_available_font_families", lambda: {"PingFang SC"})
+
+        body_font, _ = generator._resolve_preview_fonts()
+
+        assert body_font == "Noto Sans CJK SC"
+
     def test_preview_table_has_header_shading(self, tmp_path):
         out_path = str(tmp_path / "preview-table.docx")
         generate_docx_from_content(

@@ -19,6 +19,7 @@ from typing import List, Optional, Dict
 from dataclasses import dataclass, field
 from enum import Enum
 
+from app.font_embedder import get_embeddable_font_paths
 from app.presets import HeadingStyleDef, DOCX_PRESETS, VALID_STYLES, NON_PREVIEW_BLOCK_STYLES
 
 from docx import Document
@@ -31,8 +32,8 @@ from docx.oxml.ns import qn
 logger = logging.getLogger(__name__)
 
 PREVIEW_FONT_CHAIN = (
-    "PingFang SC",
     "Noto Sans CJK SC",
+    "PingFang SC",
     "Microsoft YaHei",
     "SimHei",
     "Arial Unicode MS",
@@ -51,11 +52,11 @@ PREVIEW_TABLE_CELL_MARGIN_BOTTOM = 55
 PREVIEW_TABLE_CELL_MARGIN_END = 110
 
 PREVIEW_MONO_FONT_CHAIN = (
+    "Sarasa Mono SC",
+    "Noto Sans Mono CJK SC",
     "Menlo",
     "Consolas",
     "Courier New",
-    "Sarasa Mono SC",
-    "Noto Sans Mono CJK SC",
 )
 
 PREVIEW_CONTENT_WIDTH_CM = 19.0
@@ -449,6 +450,20 @@ def _available_font_families() -> set[str]:
         return set()
 
 
+def _available_embeddable_font_families() -> set[str]:
+    families: set[str] = set()
+    for font_path in get_embeddable_font_paths():
+        stem = re.sub(r"[\s_\-]+", "", font_path.stem).lower()
+        if "notosanscjksc" in stem or stem == "notosanscjk":
+            families.add("Noto Sans CJK SC")
+        elif "notosansmonocjksc" in stem:
+            families.add("Noto Sans Mono CJK SC")
+        elif "sarasamonosc" in stem:
+            families.add("Sarasa Mono SC")
+        families.add(font_path.stem)
+    return families
+
+
 def _pick_font(candidates: tuple[str, ...], available: set[str]) -> str:
     if not available:
         return candidates[0]
@@ -460,7 +475,7 @@ def _pick_font(candidates: tuple[str, ...], available: set[str]) -> str:
 
 
 def _resolve_preview_fonts() -> tuple[str, str]:
-    available = _available_font_families()
+    available = _available_font_families() | _available_embeddable_font_families()
     return (
         _pick_font(PREVIEW_FONT_CHAIN, available),
         _pick_font(PREVIEW_MONO_FONT_CHAIN, available),
