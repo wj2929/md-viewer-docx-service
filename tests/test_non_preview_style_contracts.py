@@ -255,9 +255,14 @@ def test_non_preview_headings_disable_word_keep_constraints(tmp_path):
 
         for heading_text in ("1. 图表", "1.1 流程图"):
             para = _paragraph_by_text(out_path, heading_text)
+            keep_next_nodes = para.xpath("./w:pPr/w:keepNext", namespaces=NS)
             keep_next = para.xpath("./w:pPr/w:keepNext/@w:val", namespaces=NS)
             keep_lines = para.xpath("./w:pPr/w:keepLines/@w:val", namespaces=NS)
-            assert keep_next == ["0"]
+            if heading_text == "1.1 流程图":
+                assert keep_next_nodes
+                assert keep_next in ([], ["1"])
+            else:
+                assert keep_next == ["0"]
             assert keep_lines == ["0"]
 
 

@@ -6,6 +6,15 @@ from docx import Document
 from app.generator import parse_inline, parse_markdown, generate_docx_from_content, BlockType
 
 
+def _word_package_text(path):
+    with zipfile.ZipFile(path) as zf:
+        return "\n".join(
+            zf.read(name).decode("utf-8", errors="ignore")
+            for name in zf.namelist()
+            if name.startswith("word/") and name.endswith(".xml")
+        )
+
+
 class TestParseInline:
     def test_bold(self):
         runs = parse_inline("**粗体** text")
@@ -135,10 +144,7 @@ class TestGenerateDocx:
             footer_text=None,
         )
 
-        with zipfile.ZipFile(out_path) as zf:
-            xml = zf.read("word/document.xml").decode("utf-8")
-
-        assert "由 MD Viewer 生成" not in xml
+        assert "由 MD Viewer 生成" not in _word_package_text(out_path)
 
     @pytest.mark.parametrize(
         ("style", "has_default_footer"),
@@ -158,10 +164,27 @@ class TestGenerateDocx:
             style=style,
         )
 
-        with zipfile.ZipFile(out_path) as zf:
-            xml = zf.read("word/document.xml").decode("utf-8")
+        assert ("由 MD Viewer 生成" in _word_package_text(out_path)) is has_default_footer
 
-        assert ("由 MD Viewer 生成" in xml) is has_default_footer
+    def test_explicit_branding_is_written_to_document_body_not_word_footer(self, tmp_path):
+        out_path = str(tmp_path / "branding-in-body.docx")
+        generate_docx_from_content(
+            content="# 标题\n\n正文",
+            output_path=out_path,
+            style="official",
+            footer_text="由 MD Viewer 生成",
+        )
+
+        with zipfile.ZipFile(out_path) as zf:
+            document_xml = zf.read("word/document.xml").decode("utf-8")
+            footer_xml = "\n".join(
+                zf.read(name).decode("utf-8", errors="ignore")
+                for name in zf.namelist()
+                if name.startswith("word/footer") and name.endswith(".xml")
+            )
+
+        assert "由 MD Viewer 生成" in document_xml
+        assert "由 MD Viewer 生成" not in footer_xml
 
     def test_preview_uses_a4_and_narrow_margins(self, tmp_path):
         out_path = str(tmp_path / "preview.docx")
@@ -295,6 +318,20 @@ class TestGenerateDocx:
         heading = next(p for p in doc.paragraphs if p.text == "一、存储总览")
         assert heading.paragraph_format.space_before.pt == 8
         assert heading.paragraph_format.space_after.pt == 4
+
+    def test_preview_heading_before_chart_keeps_with_next(self, tmp_path):
+        out_path = str(tmp_path / "preview-chart-heading.docx")
+        generate_docx_from_content(
+            content="# 标题\n\n## 4.8 网络拓扑\n\n![](mdv__chart__deadbeef__)\n\n正文",
+            output_path=out_path,
+            style="preview",
+        )
+
+        with zipfile.ZipFile(out_path) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+        heading_index = xml.index("4.8 网络拓扑")
+        heading_window = xml[max(0, heading_index - 900):heading_index]
+        assert "<w:keepNext/>" in heading_window or 'w:keepNext w:val="1"' in heading_window
 
     def test_preview_heading_is_not_italic(self, tmp_path):
         out_path = str(tmp_path / "preview-heading.docx")

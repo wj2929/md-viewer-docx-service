@@ -16,7 +16,7 @@ import time
 import uuid
 import zlib
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Iterable, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -51,7 +51,7 @@ class RenderResult:
 
 def render_charts_and_formulas_sync(
     markdown: str,
-    chart_renderers: Iterable[str] | None = None,
+    chart_renderers: Optional[Iterable[str]] = None,
 ) -> RenderResult:
     """把服务端可识别的图表代码块和 KaTeX 公式转换为图片占位符。"""
     if chart_renderers is None:
@@ -73,7 +73,7 @@ def render_charts_and_formulas_sync(
             png = _render_chart_png(canonical_lang, code)
         except Exception as exc:
             png = _render_text_png(f"{lang}\n\n{code}", title=f"{lang} 渲染失败，已保留源码图")
-            result.warnings.append(f"{lang} render fallback: {exc}")
+            result.warnings.append(_render_fallback_warning(lang, exc))
 
         result.images[placeholder] = RenderedImage(id=placeholder, png_bytes=png)
         return f"\n\n![]({placeholder})\n\n"
@@ -87,7 +87,7 @@ def render_charts_and_formulas_sync(
             png = _render_katex_png(expr, display_mode=True)
         except Exception as exc:
             png = _render_text_png(expr, title="KaTeX 公式渲染失败，已保留源码图")
-            result.warnings.append(f"katex render fallback: {exc}")
+            result.warnings.append(_render_fallback_warning("katex", exc))
         result.images[placeholder] = RenderedImage(
             id=placeholder,
             png_bytes=png,
@@ -104,7 +104,7 @@ def render_charts_and_formulas_sync(
             png = _render_katex_png(expr, display_mode=False)
         except Exception as exc:
             png = _render_text_png(expr, title="行内公式渲染失败，已保留源码图")
-            result.warnings.append(f"katex render fallback: {exc}")
+            result.warnings.append(_render_fallback_warning("katex", exc))
         result.images[placeholder] = RenderedImage(
             id=placeholder,
             png_bytes=png,
@@ -114,6 +114,27 @@ def render_charts_and_formulas_sync(
 
     result.markdown = INLINE_MATH_RE.sub(replace_inline_math, result.markdown)
     return result
+
+
+def _render_fallback_warning(renderer: str, exc: Exception) -> str:
+    message = str(exc)
+    lowered = message.lower()
+    if "playwright is not installed" in lowered:
+        return (
+            f"{renderer} 渲染已降级：DOCX 服务未安装 Playwright。"
+            "请在服务运行环境执行 python -m pip install playwright && python -m playwright install chromium，"
+            "或使用包含浏览器运行时的 full Docker 镜像。"
+        )
+    if "executable doesn't exist" in lowered and "ms-playwright" in lowered:
+        return (
+            f"{renderer} 渲染已降级：DOCX 服务运行用户缺少 Playwright Chromium。"
+            "请在启动 DOCX 服务的同一用户下执行 python -m playwright install chromium；"
+            "如果使用 Docker，请改用 full 镜像或重新构建包含 Chromium 的镜像。"
+        )
+    summary = " ".join(message.split())
+    if len(summary) > 240:
+        summary = summary[:237] + "..."
+    return f"{renderer} 渲染已降级，已保留源码图：{summary}"
 
 
 def _canonical_chart_lang(lang: str) -> str:
@@ -206,7 +227,7 @@ def _render_plantuml_png(code: str) -> bytes:
     timeout = float(os.environ.get("MDV_PLANTUML_TIMEOUT_SEC", "12"))
     retries = max(1, int(os.environ.get("MDV_PLANTUML_RETRIES", "3")))
 
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
     for attempt in range(retries):
         try:
             if len(encoded) <= 4000:

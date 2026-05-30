@@ -177,6 +177,30 @@ class TestInjectImages:
         assert cell_para._element.xpath(".//w:drawing")
         assert cell_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
 
+    def test_inline_placeholder_image_uses_chart_paragraph_layout(self, tmp_path, small_png_base64):
+        placeholder_id = "mdv__chart__a0b1c2d3__"
+        doc_path = str(tmp_path / "inline-image.docx")
+        doc = Document()
+        para = doc.add_paragraph(f"before ![]({placeholder_id}) after")
+        para.paragraph_format.first_line_indent = 914400
+        doc.save(doc_path)
+
+        count = inject_images(
+            doc_path,
+            {placeholder_id: ImageData(placeholder_id, small_png_base64)},
+            style="preview",
+            layout=ImageLayout(max_width_cm=19.0, max_height_cm=14.8, margin_cm=0.45),
+        )
+
+        assert count == 1
+        reopened = Document(doc_path)
+        image_para = next(p for p in reopened.paragraphs if p._element.xpath(".//w:drawing"))
+        assert placeholder_id not in image_para.text
+        assert image_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
+        assert round(image_para.paragraph_format.space_before.cm, 2) == 0.45
+        assert round(image_para.paragraph_format.space_after.cm, 2) == 0.45
+        assert image_para.paragraph_format.first_line_indent is None
+
 
 class TestImageWidth:
     def test_preview_respects_client_image_width_without_forced_enlarge(self):
@@ -191,14 +215,21 @@ class TestImageWidth:
         from app.image_injector import resolve_image_width_cm
 
         assert resolve_image_width_cm(20.0, style="standard", layout=ImageLayout(max_width_cm=15.5)) == 15.5
-        assert resolve_image_width_cm(20.0, style="official", layout=ImageLayout(max_width_cm=14.8)) == 14.8
+        assert resolve_image_width_cm(20.0, style="official", layout=ImageLayout(max_width_cm=15.2)) == 15.2
 
-    def test_report_does_not_enlarge_tiny_images(self):
+    def test_non_preview_layout_does_not_enlarge_tiny_images(self):
         from app.image_injector import resolve_image_width_cm
 
         layout = ImageLayout(max_width_cm=15.8, min_width_cm=15.0, min_width_source_threshold_cm=8.0)
         assert resolve_image_width_cm(3.0, style="report", layout=layout) == 3.0
         assert resolve_image_width_cm(10.0, style="report", layout=layout) == 15.0
+
+    def test_non_preview_layout_enlarges_readable_wide_diagrams(self):
+        from app.image_injector import resolve_image_width_cm
+
+        layout = ImageLayout(max_width_cm=15.2, min_width_cm=14.8, min_width_source_threshold_cm=8.0)
+
+        assert resolve_image_width_cm(12.06, style="official", layout=layout, image_size=(2348, 1974)) == 14.8
 
     def test_non_preview_tall_images_are_clamped_by_height_budget(self):
         from app.image_injector import resolve_image_width_cm
@@ -222,3 +253,12 @@ class TestImageWidth:
         assert layout is not None
         assert layout.max_width_cm == 19.0
         assert round(resolve_image_width_cm(15.5, style="preview", layout=layout, image_size=(1000, 2000)), 2) == 7.4
+
+    def test_preview_enlarges_readable_landscape_diagrams(self):
+        from app.image_injector import resolve_image_width_cm
+        from app.main import _image_layout_for_style
+
+        layout = _image_layout_for_style("preview")
+
+        assert layout is not None
+        assert resolve_image_width_cm(7.75, style="preview", layout=layout, image_size=(2348, 1424)) == 15.5

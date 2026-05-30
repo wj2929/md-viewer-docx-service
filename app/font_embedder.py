@@ -12,6 +12,7 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 
 FONT_EXTENSIONS = {".ttf", ".otf", ".ttc"}
@@ -44,7 +45,7 @@ DEFAULT_FONT_DIRS = [
 ]
 
 
-def _split_env_paths(value: str | None) -> list[Path]:
+def _split_env_paths(value: Optional[str]) -> list[Path]:
     if not value:
         return []
     raw_parts: list[str] = []
@@ -62,7 +63,7 @@ def _iter_font_files_in_dir(directory: Path) -> list[Path]:
     )
 
 
-def get_embeddable_font_paths(font_paths: list[str] | None = None) -> list[Path]:
+def get_embeddable_font_paths(font_paths: Optional[list[str]] = None) -> list[Path]:
     """按优先级返回当前服务能找到的字体文件。"""
     candidates: list[Path] = []
     if font_paths is not None:
@@ -133,7 +134,7 @@ def _font_path_matches_references(font_path: Path, referenced_fonts: set[str]) -
     return False
 
 
-def _font_setup_hint(reason: str, referenced_fonts: set[str] | None = None) -> str:
+def _font_setup_hint(reason: str, referenced_fonts: Optional[set[str]] = None) -> str:
     parts = [reason]
     if referenced_fonts:
         fonts = "、".join(sorted(referenced_fonts)[:8])
@@ -150,7 +151,7 @@ def _font_setup_hint(reason: str, referenced_fonts: set[str] | None = None) -> s
 def embed_fonts_if_requested(
     docx_path: str,
     embed_font: bool,
-    font_paths: list[str] | None = None,
+    font_paths: Optional[list[str]] = None,
 ) -> list[str]:
     if not embed_font:
         return []
@@ -190,7 +191,7 @@ def embed_fonts_if_requested(
     return warnings
 
 
-def resolve_reference_docx(reference_base64: str | None) -> tuple[str | None, list[str]]:
+def resolve_reference_docx(reference_base64: Optional[str]) -> tuple[Optional[str], list[str]]:
     """验证自定义 reference.docx。当前生成器会复用其首个 section 和样式。"""
     if not reference_base64:
         return None, []

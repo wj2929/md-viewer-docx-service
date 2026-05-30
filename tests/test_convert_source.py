@@ -251,6 +251,26 @@ def test_full_fidelity_chart_width_prefers_renderer_physical_width(tmp_path, sma
     assert result[0]["widthCm"] == 13.1
 
 
+def test_full_fidelity_chart_width_lifts_tiny_renderer_width(tmp_path, small_png_base64):
+    import base64
+    from app.main import _full_fidelity_images_to_base64
+
+    png_path = tmp_path / "chart.png"
+    png_path.write_bytes(base64.b64decode(small_png_base64))
+
+    class TinyRendererChart:
+        id = "mdv__chart__00000000__"
+        type = "bpmn"
+        pngPath = str(png_path)
+        widthPx = 600
+        heightPx = 360
+        widthCm = 1.58
+
+    result = _full_fidelity_images_to_base64([TinyRendererChart()])
+
+    assert result[0]["widthCm"] >= 6.0
+
+
 def test_full_fidelity_images_to_base64_preserves_block_id(tmp_path, small_png_base64):
     import base64
     from app.main import _full_fidelity_images_to_base64

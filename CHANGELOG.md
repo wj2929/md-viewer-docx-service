@@ -6,6 +6,34 @@
 
 ---
 
+## [0.2.2] - 2026-05-30
+
+> 状态：配套 MD Viewer v2.4.0
+> 类型：补丁修复，DOCX 图表/公式导出尺寸、对齐和诊断优化
+
+### 修复
+
+- 修复部分图表、公式或客户端预渲染图片在 DOCX 中过小、过大、未居中或被正文缩进影响的问题。
+- 修复 `preview` 与非 `preview` 样式下宽幅架构图、流程图、ERD、拓扑图等内容可读性不足的问题，按图片宽高和版心约束做最小可读宽度提升。
+- 修复图表标题与紧随其后的图表图片在 Word 中容易分页分离的问题。
+- 修复默认品牌信息被写入 Word 页脚的问题，改为输出在正文末尾，与 MD Viewer PDF 导出行为保持一致。
+- 修复重复渲染 warning 在响应头中多次出现的问题，改为去重后返回。
+- 改进 Playwright/Chromium 缺失时的图表降级 warning，直接说明 full 镜像或安装 Chromium 的处理办法。
+
+### 改进
+
+- 服务版本升至 `0.2.2`，推荐与 MD Viewer v2.4.0 同步部署。
+- `package.json` / `package-lock.json` 版本同步到 `0.2.2`，避免 renderer 依赖包版本和 FastAPI 服务版本长期不一致。
+- 保持 renderer artifact schema `2.0` 不变，继续兼容 MD Viewer v2.2+ 的图表渲染产物。
+- 补充 DOCX 图片注入和非 preview 样式契约测试，覆盖内联占位图、宽图放大、竖图高度约束、图表标题分页和品牌信息位置。
+
+### 测试
+
+- 新增/更新 chart renderer、image injector、generator、convert-source、main 和 non-preview style contracts 测试。
+- 重点覆盖真实导出中暴露的图表尺寸、居中、源码降级 warning、品牌信息和服务端 full fidelity 图片宽度逻辑。
+
+---
+
 ## [0.2.1] - 2026-05-22
 
 > 状态：配套 MD Viewer v2.3.0

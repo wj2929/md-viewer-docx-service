@@ -25,6 +25,8 @@ IMAGE_MAX_PIXELS = 20_000_000
 IMAGE_MAX_B64_LEN = 2_800_000
 PREVIEW_IMAGE_MARGIN_CM = 0.45
 DEFAULT_IMAGE_MARGIN_CM = 0.3
+READABLE_LANDSCAPE_MIN_WIDTH_CM = 15.5
+READABLE_LANDSCAPE_SOURCE_THRESHOLD_CM = 7.0
 
 
 @dataclass(frozen=True)
@@ -79,10 +81,21 @@ def resolve_image_width_cm(
     """根据导出样式解析图片插入宽度。"""
     if layout is not None:
         resolved = min(width_cm, layout.max_width_cm)
+        is_readable_landscape = False
+        if image_size:
+            pixel_width, pixel_height = image_size
+            if pixel_width > 0 and pixel_height > 0:
+                ratio = pixel_height / pixel_width
+                is_readable_landscape = (
+                    pixel_width >= 900
+                    and pixel_height >= 300
+                    and 0.25 <= ratio <= 1.25
+                )
         should_enlarge = (
             layout.min_width_cm
             and width_cm >= layout.min_width_source_threshold_cm
             and resolved < layout.min_width_cm
+            and (style != "preview" or is_readable_landscape)
         )
         if should_enlarge:
             resolved = min(layout.min_width_cm, layout.max_width_cm)
@@ -98,6 +111,20 @@ def resolve_image_width_cm(
     if style == "preview":
         return min(width_cm, 19.0)
     return width_cm
+
+
+def _apply_image_paragraph_layout(para, style: str, layout: Optional[ImageLayout]) -> None:
+    """统一图表图片段落排版，避免正文缩进/固定行距压缩图片。"""
+    pf = para.paragraph_format
+    pf.line_spacing = None
+    pf.line_spacing_rule = None
+    pf.first_line_indent = None
+    margin_cm = layout.margin_cm if layout is not None else (
+        PREVIEW_IMAGE_MARGIN_CM if style == "preview" else DEFAULT_IMAGE_MARGIN_CM
+    )
+    pf.space_before = Cm(margin_cm)
+    pf.space_after = Cm(margin_cm)
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
 def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, ImageData]]:
@@ -182,10 +209,7 @@ def inject_images(
                 para.add_run(original_text[cursor:])
 
             if inserted_any:
-                pf = para.paragraph_format
-                pf.line_spacing = None
-                pf.line_spacing_rule = None
-                pf.first_line_indent = None
+                _apply_image_paragraph_layout(para, style, layout)
             continue
 
         placeholder_id = m.group(1)
@@ -211,16 +235,7 @@ def inject_images(
         injected += 1
 
         # 清除图片段落的固定行距和首行缩进（公文等样式的固定行距会压扁图片）
-        pf = para.paragraph_format
-        pf.line_spacing = None
-        pf.line_spacing_rule = None
-        pf.first_line_indent = None
-        margin_cm = layout.margin_cm if layout is not None else (
-            PREVIEW_IMAGE_MARGIN_CM if style == "preview" else DEFAULT_IMAGE_MARGIN_CM
-        )
-        pf.space_before = Cm(margin_cm)
-        pf.space_after = Cm(margin_cm)
-        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _apply_image_paragraph_layout(para, style, layout)
 
         logger.info(f"[ImageInjector] Injected {placeholder_id} ({len(img_data.png_bytes)} bytes)")
 

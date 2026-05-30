@@ -113,6 +113,9 @@ _RE_CODE_FENCE = re.compile(r"^```")
 _RE_HR = re.compile(r"^(-{3,}|_{3,}|\*{3,})\s*$")
 _RE_TABLE_ROW = re.compile(r"^\|(.+)\|$")
 _RE_TABLE_SEP = re.compile(r"^\|[\s:|-]+\|$")
+_RE_CHART_PLACEHOLDER_PARAGRAPH = re.compile(
+    r"^!\[[^\]\n]*\]\(\s*mdv__chart__[0-9a-f]{8}__(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)$"
+)
 _RE_NOTE_PREFIX = re.compile(r"^\s*(?:\*\*)?\s*(注意|说明|注|Note|Warning)\s*[:：]\s*(?:\*\*)?\s*", re.IGNORECASE)
 _RE_GFM_ALERT = re.compile(r"^\s*\[!(NOTE|WARNING|TIP|IMPORTANT)\]\s*", re.IGNORECASE)
 
@@ -130,7 +133,7 @@ def _resolve_footer_text(style: str, footer_text):
         return footer_text
     if style in _FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER:
         return None
-    return "由 MD Viewer 生成"
+    return "由 MD Viewer 生成 · github.com/wj2929/md-viewer"
 
 
 def _decode_markdown_text(text: str) -> str:
@@ -374,6 +377,21 @@ def _set_run_fonts(run, latin_font: str, east_asia_font: Optional[str] = None):
     r_fonts.set(qn("w:eastAsia"), east_asia_font or latin_font)
 
 
+def _append_document_branding(doc: Document, branding_text: Optional[str], font_name: str = "宋体", size_pt: float = 9) -> None:
+    """将品牌信息作为正文末尾段落输出，和 PDF 导出保持一致，不写入 Word 页脚。"""
+    if not branding_text:
+        return
+
+    para = doc.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    para.paragraph_format.space_before = Pt(12)
+    para.paragraph_format.space_after = Pt(0)
+    run = para.add_run(branding_text)
+    _set_run_fonts(run, font_name)
+    run.font.size = Pt(size_pt)
+    run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+
+
 def _apply_runs(
     paragraph,
     runs: List[TextRun],
@@ -429,6 +447,14 @@ def _disable_paragraph_keep_constraints(paragraph):
     pf.keep_with_next = False
     pf.keep_together = False
     pf.page_break_before = False
+
+
+def _is_chart_placeholder_block(block: Optional[Block]) -> bool:
+    return bool(
+        block
+        and block.type == BlockType.PARAGRAPH
+        and _RE_CHART_PLACEHOLDER_PARAGRAPH.match(block.text.strip())
+    )
 
 
 def _available_font_families() -> set[str]:
@@ -997,7 +1023,7 @@ def generate_standard_docx(
     title: str,
     messages: List[MessageDTO],
     output_path: str,
-    footer_text: Optional[str] = "由 MD Viewer 生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成 · github.com/wj2929/md-viewer",
 ):
     """
     通用格式 Word 导出
@@ -1048,16 +1074,7 @@ def generate_standard_docx(
         blocks = parse_markdown(msg.content)
         _render_blocks(doc, blocks, font_name="宋体", body_size=Pt(12))
 
-    # 页脚
-    if footer_text:
-        doc.add_paragraph("")
-        footer_para = doc.add_paragraph()
-        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer_run = footer_para.add_run(footer_text)
-        footer_run.font.name = "宋体"
-        footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-        footer_run.font.size = Pt(9)
-        footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    _append_document_branding(doc, footer_text, "宋体", 9)
 
     doc.save(output_path)
     logger.info(f"[DocxExport] 标准格式导出完成: {output_path}")
@@ -1067,7 +1084,7 @@ def generate_official_docx(
     title: str,
     messages: List[MessageDTO],
     output_path: str,
-    footer_text: Optional[str] = "由 MD Viewer 生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成 · github.com/wj2929/md-viewer",
 ):
     """
     行政公文标准格式 Word 导出（GB/T 9704-2012 近似）
@@ -1121,16 +1138,7 @@ def generate_official_docx(
             align=WD_ALIGN_PARAGRAPH.JUSTIFY,
         )
 
-    # 页脚
-    if footer_text:
-        doc.add_paragraph("")
-        footer_para = doc.add_paragraph()
-        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer_run = footer_para.add_run(footer_text)
-        footer_run.font.name = "宋体"
-        footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-        footer_run.font.size = Pt(9)
-        footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    _append_document_branding(doc, footer_text, "宋体", 9)
 
     doc.save(output_path)
     logger.info(f"[DocxExport] 公文格式导出完成: {output_path}")
@@ -1234,6 +1242,8 @@ def _render_blocks(
                         color_el.attrib.pop(qn(f'w:{attr}'), None)
             _set_paragraph_spacing(para, before=heading_spacing_before, after=heading_spacing_after, line=line_spacing)
             _disable_paragraph_keep_constraints(para)
+            if _is_chart_placeholder_block(blocks[idx + 1] if idx + 1 < len(blocks) else None):
+                para.paragraph_format.keep_with_next = True
 
         elif block.type == BlockType.PARAGRAPH:
             para = doc.add_paragraph()
@@ -1533,7 +1543,7 @@ def generate_docx_from_content(
         output_path: 输出文件路径
         style: 排版预设 ID（preview/official/internal/report/standard）
         title: 文档标题，为空时自动从内容首个 # 标题提取
-        footer_text: 页脚文字
+        footer_text: 文末品牌文字；None 时不输出
         references: 引用列表（来自 ArtifactVersion.metadata_），用于渲染引用角标和参考来源
     """
     # 白名单校验
@@ -1663,16 +1673,7 @@ def generate_docx_from_content(
             line_spacing=line_spacing_val,
         )
 
-    # 页脚
-    if footer_text:
-        doc.add_paragraph("")
-        footer_para = doc.add_paragraph()
-        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer_run = footer_para.add_run(footer_text)
-        footer_run.font.name = "宋体"
-        footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-        footer_run.font.size = Pt(9)
-        footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    _append_document_branding(doc, footer_text, "宋体", 9)
 
     doc.save(output_path)
     logger.info(f"[DocxExport] {style} 格式导出完成: {output_path}")
@@ -1682,7 +1683,7 @@ def _generate_preview_from_content(
     content: str,
     output_path: str,
     title: str = None,
-    footer_text: Optional[str] = "由 MD Viewer 生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成 · github.com/wj2929/md-viewer",
     references: Optional[List[dict]] = None,
     ref_id_to_index: Optional[Dict[str, int]] = None,
     reference_docx_path: Optional[str] = None,
@@ -1762,14 +1763,7 @@ def _generate_preview_from_content(
             line_spacing=PREVIEW_BODY_LINE_SPACING,
         )
 
-    if footer_text:
-        doc.add_paragraph("")
-        footer_para = doc.add_paragraph()
-        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer_run = footer_para.add_run(footer_text)
-        _set_run_fonts(footer_run, body_font)
-        footer_run.font.size = Pt(8)
-        footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    _append_document_branding(doc, footer_text, body_font, 8)
 
     doc.save(output_path)
     logger.info(f"[DocxExport] preview 格式导出完成: {output_path}")
@@ -1779,7 +1773,7 @@ def _generate_standard_from_content(
     content: str,
     output_path: str,
     title: str = None,
-    footer_text: Optional[str] = "由 MD Viewer 生成",
+    footer_text: Optional[str] = "由 MD Viewer 生成 · github.com/wj2929/md-viewer",
     references: Optional[List[dict]] = None,
     ref_id_to_index: Optional[Dict[str, int]] = None,
     reference_docx_path: Optional[str] = None,
@@ -1834,16 +1828,7 @@ def _generate_standard_from_content(
     if references:
         _add_reference_list(doc, references, font_name=std_body_font, body_size=std_body_size)
 
-    # 页脚
-    if footer_text:
-        doc.add_paragraph("")
-        footer_para = doc.add_paragraph()
-        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer_run = footer_para.add_run(footer_text)
-        footer_run.font.name = std_body_font
-        footer_run._element.rPr.rFonts.set(qn("w:eastAsia"), std_body_font)
-        footer_run.font.size = Pt(9)
-        footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    _append_document_branding(doc, footer_text, std_body_font, 9)
 
     doc.save(output_path)
     logger.info(f"[DocxExport] standard 格式导出完成: {output_path}")

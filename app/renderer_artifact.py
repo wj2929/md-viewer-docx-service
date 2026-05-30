@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -30,7 +32,7 @@ class RendererArtifactError(RuntimeError):
 
 class RendererManifestEntry(BaseModel):
     type: str
-    displayName: str | None = None
+    displayName: Optional[str] = None
     capabilities: dict = Field(default_factory=dict)
 
 

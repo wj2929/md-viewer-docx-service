@@ -44,4 +44,4 @@ def test_formal_source_styles_default_to_no_footer_text():
 
 def test_standard_source_style_keeps_generated_footer_by_default():
     req = ConvertSourceRequest(sourceType="markdown", markdown="# 标题", style="standard")
-    assert req.footerText == "由 MD Viewer 生成"
+    assert req.footerText == "由 MD Viewer 生成 · github.com/wj2929/md-viewer"

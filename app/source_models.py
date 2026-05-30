@@ -42,7 +42,7 @@ class ConvertSourceRequest(BaseModel):
     @model_validator(mode="after")
     def validate_markdown_source(self):
         if "footerText" not in self.model_fields_set:
-            self.footerText = None if self.style in FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER else "由 MD Viewer 生成"
+            self.footerText = None if self.style in FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER else "由 MD Viewer 生成 · github.com/wj2929/md-viewer"
         if self.sourceType == "markdown" and not self.markdown:
             raise ValueError("markdown is required when sourceType=markdown")
         if self.sourceType == "url" and not self.url:

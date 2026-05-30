@@ -135,7 +135,7 @@ X-API-Key: your-api-key
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "mode": "slim",
   "styles": ["preview", "standard", "official", "internal", "report"],
   "fontsAvailable": ["Noto Sans CJK SC"],

@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+from typing import Optional
 from urllib.parse import urlparse
 
 
@@ -32,7 +33,7 @@ def _resolve_host_ips(host: str) -> list[ipaddress._BaseAddress]:
     return addresses
 
 
-def _content_type_is_markdown(content_type: str | None) -> bool:
+def _content_type_is_markdown(content_type: Optional[str]) -> bool:
     if not content_type:
         return False
     normalized = content_type.split(";", 1)[0].strip().lower()
@@ -47,8 +48,8 @@ def assert_safe_source_url(
     url: str,
     *,
     policy: str,
-    allowlist_hosts: list[str] | None = None,
-    content_type: str | None = None,
+    allowlist_hosts: Optional[list[str]] = None,
+    content_type: Optional[str] = None,
     validate_markdown_hint: bool = True,
 ) -> None:
     parsed = urlparse(url)

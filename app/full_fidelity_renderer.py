@@ -3,7 +3,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -33,8 +33,8 @@ class RenderedImage(BaseModel):
     heightPx: int = Field(..., ge=1)
     widthCm: float = Field(..., gt=0)
     durationMs: int = Field(default=0, ge=0)
-    sourceIndex: int | None = Field(default=None, ge=0)
-    blockId: str | None = None
+    sourceIndex: Optional[int] = Field(default=None, ge=0)
+    blockId: Optional[str] = None
 
 
 class RenderStats(BaseModel):
@@ -131,9 +131,9 @@ def render_markdown_full_fidelity(
     markdown: str,
     renderer_cli: Sequence[str],
     output_dir: Path,
-    resources: list[dict] | None = None,
-    markdown_file_path: str | None = None,
-    timeout_ms: int | None = None,
+    resources: Optional[list[dict]] = None,
+    markdown_file_path: Optional[str] = None,
+    timeout_ms: Optional[int] = None,
 ) -> FullFidelityRenderResult:
     output_dir = output_dir.resolve()
     total_timeout_ms = timeout_ms or int(os.environ.get("MDV_RENDER_TIMEOUT_MS", "60000"))

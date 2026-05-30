@@ -26,7 +26,13 @@ from slowapi.errors import RateLimitExceeded
 
 from app.generator import generate_docx_from_content
 from app.presets import VALID_STYLES, DOCX_PRESETS, STYLE_ORDER, NON_PREVIEW_BLOCK_STYLES
-from app.image_injector import preprocess_markdown, inject_images, ImageLayout
+from app.image_injector import (
+    preprocess_markdown,
+    inject_images,
+    ImageLayout,
+    READABLE_LANDSCAPE_MIN_WIDTH_CM,
+    READABLE_LANDSCAPE_SOURCE_THRESHOLD_CM,
+)
 from app.chart_renderers import render_charts_and_formulas_sync, rendered_images_to_base64
 from app.font_embedder import embed_fonts_if_requested, get_embeddable_font_paths, resolve_reference_docx
 from app.bundle_loader import normalize_bundle_path, normalize_bundle_resources
@@ -39,13 +45,15 @@ from app.source_models import ConvertSourceRequest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 MIN_CLIENT_VERSION = "1.7.0"
 KATEX_WIDTH_CM_PER_CSS_PX = 0.018
 KATEX_MIN_WIDTH_CM = 2.8
 KATEX_MAX_WIDTH_CM = 10.5
 CHART_WIDTH_CM_PER_CSS_PX = 0.018
 CHART_MIN_WIDTH_CM = 2.8
+CHART_TINY_WIDTH_THRESHOLD_CM = 4.0
+CHART_READABLE_MIN_WIDTH_CM = 6.0
 CHART_MAX_WIDTH_CM = 15.5
 DEFAULT_RENDERER_CHART_WIDTH_CM = 15.5
 
@@ -199,10 +207,21 @@ def _font_status_by_style() -> dict[str, dict[str, dict]]:
 FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER = {"official", "internal", "report"}
 
 
-def _default_footer_for_style(style: str) -> str | None:
+def _default_footer_for_style(style: str) -> Optional[str]:
     if style in FORMAL_STYLES_WITHOUT_DEFAULT_FOOTER:
         return None
-    return "由 MD Viewer 生成"
+    return "由 MD Viewer 生成 · github.com/wj2929/md-viewer"
+
+
+def _dedupe_warnings(warnings: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for warning in warnings:
+        if warning in seen:
+            continue
+        seen.add(warning)
+        deduped.append(warning)
+    return deduped
 
 
 def _font_warnings_for_style(style: str) -> list[str]:
@@ -220,11 +239,13 @@ def _font_warnings_for_style(style: str) -> list[str]:
     return warnings
 
 
-def _image_layout_for_style(style: str) -> ImageLayout | None:
+def _image_layout_for_style(style: str) -> Optional[ImageLayout]:
     if style == "preview":
         return ImageLayout(
             max_width_cm=DOCX_PRESETS["preview"]["content_width_cm"],
             max_height_cm=14.8,
+            min_width_cm=READABLE_LANDSCAPE_MIN_WIDTH_CM,
+            min_width_source_threshold_cm=READABLE_LANDSCAPE_SOURCE_THRESHOLD_CM,
             margin_cm=0.45,
         )
     block_style = NON_PREVIEW_BLOCK_STYLES.get(style)
@@ -357,7 +378,8 @@ def _resolve_full_fidelity_width_cm(image) -> float:
     if image_type == "katex":
         return min(KATEX_MAX_WIDTH_CM, max(KATEX_MIN_WIDTH_CM, round(width_px * KATEX_WIDTH_CM_PER_CSS_PX, 2)))
     if 0 < fallback_width_cm < DEFAULT_RENDERER_CHART_WIDTH_CM:
-        return min(CHART_MAX_WIDTH_CM, max(CHART_MIN_WIDTH_CM, round(fallback_width_cm, 2)))
+        min_width_cm = CHART_READABLE_MIN_WIDTH_CM if fallback_width_cm < CHART_TINY_WIDTH_THRESHOLD_CM else CHART_MIN_WIDTH_CM
+        return min(CHART_MAX_WIDTH_CM, max(min_width_cm, round(fallback_width_cm, 2)))
     if image_type in {"echarts", "drawio", "graphviz"}:
         return CHART_MAX_WIDTH_CM
     return min(CHART_MAX_WIDTH_CM, max(CHART_MIN_WIDTH_CM, round(width_px * CHART_WIDTH_CM_PER_CSS_PX, 2)))
@@ -423,7 +445,7 @@ def _create_full_fidelity_block_id(
     start_offset: int,
     end_offset: int,
     source: str,
-    resolved_path: str | None = None,
+    resolved_path: Optional[str] = None,
 ) -> tuple[str, str]:
     source_hash = _stable_hash(source)
     identity_parts = [
@@ -771,6 +793,7 @@ async def convert(req: ConvertRequest, request: Request):
 
         font_warnings = await asyncio.to_thread(embed_fonts_if_requested, tmp_path, req.embedFont)
         warnings.extend(font_warnings)
+        warnings = _dedupe_warnings(warnings)
 
         headers = {
             "X-Service-Version": VERSION,
@@ -865,6 +888,7 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
             + font_warnings
             + plantuml_result.warnings
         )
+        warnings = _dedupe_warnings(warnings)
 
         failed_blocks = _model_or_dict(render_result.stats).get("failedBlocks", 0)
         headers = {

@@ -222,6 +222,21 @@ class TestConvertPlainText:
         warnings = json.loads(resp.headers["x-convert-warnings"])
         assert any("仿宋_GB2312" in warning and "Noto Sans CJK SC" in warning for warning in warnings)
 
+    def test_convert_warnings_are_deduped(self, client):
+        duplicate = RenderResult(
+            markdown="# Test",
+            warnings=["katex 渲染已降级：DOCX 服务运行用户缺少 Playwright Chromium。"] * 3,
+        )
+        with patch("app.main.render_charts_and_formulas_sync", return_value=duplicate):
+            resp = client.post("/convert", json={
+                "markdown": "# Test\n\nInline $a+b$ and $c+d$.",
+                "style": "preview",
+            })
+
+        assert resp.status_code == 200
+        warnings = json.loads(resp.headers["x-convert-warnings"])
+        assert warnings == ["katex 渲染已降级：DOCX 服务运行用户缺少 Playwright Chromium。"]
+
     def test_null_footer_text_disables_generated_branding(self, client):
         resp = client.post("/convert", json={
             "markdown": "# 标题\n\n正文",

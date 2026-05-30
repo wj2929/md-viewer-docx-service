@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.chart_renderers import (
     RenderedImage,
+    _render_fallback_warning,
     _normalize_plantuml_code,
     render_charts_and_formulas_sync,
     rendered_images_to_base64,
@@ -53,6 +54,25 @@ def test_render_formulas_replaces_katex_blocks_with_images():
     assert "$$" not in result.markdown
     assert "$a+b$" not in result.markdown
     assert len(result.images) == 2
+
+
+def test_playwright_browser_missing_warning_is_user_actionable():
+    error = RuntimeError(
+        "BrowserType.launch: Executable doesn't exist at "
+        "/var/root/Library/Caches/ms-playwright/chromium_headless_shell-1187/chrome-mac/headless_shell\n"
+        "╔════════════════════════════════════════════════════════════╗\n"
+        "║ Looks like Playwright was just installed or updated.       ║\n"
+        "║     playwright install                                     ║\n"
+        "╚════════════════════════════════════════════════════════════╝"
+    )
+
+    warning = _render_fallback_warning("katex", error)
+
+    assert warning.startswith("katex 渲染已降级")
+    assert "同一用户" in warning
+    assert "python -m playwright install chromium" in warning
+    assert "/var/root" not in warning
+    assert "╔" not in warning
 
 
 def test_full_mode_katex_renderer_produces_formula_png():
