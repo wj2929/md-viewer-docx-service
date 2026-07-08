@@ -361,6 +361,45 @@ FULL_FIDELITY_IMAGE_TYPES = {
     "c4plantuml",
 }
 
+# B 类：md-viewer 识别为图表、但本服务不做全保真渲染的语言（kroki/antv-g6/dbml/plotly/structurizr 及别名）。
+# 来源：md-viewer src/renderer/src/renderers/builtin.ts 的 languages+aliases（新增图表类型时需同步此处）。
+# 这些围栏若在所有渲染轮次后仍残留 = 未渲染，应中性化为占位，而非把图表源码漏进交付文档。
+UNSUPPORTED_CHART_FENCE_LANGUAGES = frozenset({
+    "structurizr", "structurizr-dsl",
+    "plotly", "plotly-json",
+    "dbml",
+    "antv-g6", "g6",
+    "kroki", "pikchr", "nomnoml", "svgbob", "bytefield", "tikz",
+    "kroki-pikchr", "kroki-nomnoml", "kroki-svgbob", "kroki-bytefield", "kroki-tikz",
+})
+
+# 所有"图表语言围栏" = 本服务已支持的(A) ∪ 已知不支持的(B)。渲染轮次后仍残留 = 未渲染。
+_CHART_FENCE_LANGUAGES = frozenset(FULL_FIDELITY_LANGUAGE_TYPES.keys()) | UNSUPPORTED_CHART_FENCE_LANGUAGES
+
+# 失败/未渲染图表在产物里的中性占位文本（与 md-viewer 渲染侧 W2 一致）。诊断细节进报警通道，不进文档。
+NEUTRAL_CHART_PLACEHOLDER = "[图表未渲染]"
+
+
+def _neutralize_unrendered_chart_blocks(markdown: str) -> tuple[str, int]:
+    """W2-DOCX 安全网：把所有渲染轮次后仍残留的图表语言围栏替换为中性占位，避免图表源码漏进 DOCX。
+
+    必须在全部图表渲染轮次（full-fidelity / 客户端送图 / 服务端 plantuml）之后调用——
+    届时成功渲染的图表已被换成 ``![](mdv__chart__...)`` 占位，残留的图表语言围栏即失败/不支持的。
+    只匹配图表语言围栏（A 类已支持 + B 类不支持），绝不触碰 ``python``/``bash``/``text`` 等正常代码块，
+    也不触碰 ``![](mdv__chart__...)`` 图片占位。返回 (处理后的 markdown, 被中性化的图表块数)。
+    """
+    replacements: list[tuple[int, int]] = []
+    for match in FULL_FIDELITY_FENCE_PATTERN.finditer(markdown):
+        lang = (match.group("lang") or "").strip().lower()
+        if lang in _CHART_FENCE_LANGUAGES:
+            replacements.append((match.start(), match.end()))
+    if not replacements:
+        return markdown, 0
+    result = markdown
+    for start, end in sorted(replacements, reverse=True):
+        result = f"{result[:start]}\n\n{NEUTRAL_CHART_PLACEHOLDER}\n\n{result[end:]}"
+    return result, len(replacements)
+
 
 def _get_field(value, field: str, default=None):
     if isinstance(value, dict):
@@ -766,6 +805,14 @@ async def convert(req: ConvertRequest, request: Request):
         _, image_map = preprocess_markdown(md, rendered_images)
         charts_rendered = len(image_map)
 
+    # W2 安全网：客户端送来的 md 里若有未渲染图表围栏（失败/不支持）→ 中性占位，杜绝图表源码漏进 DOCX。
+    md, neutralized_charts = _neutralize_unrendered_chart_blocks(md)
+    if neutralized_charts > 0:
+        warnings.append(
+            f"{neutralized_charts} 个图表未能渲染，已用占位符替代（图表源码不会进入文档）"
+        )
+        charts_failed += neutralized_charts
+
     tmp_dir = tempfile.mkdtemp(prefix="mdv-docx-")
     tmp_path = os.path.join(tmp_dir, f"output-{uuid.uuid4().hex[:8]}.docx")
 
@@ -801,6 +848,7 @@ async def convert(req: ConvertRequest, request: Request):
             "X-Convert-Warnings": json.dumps(warnings, ensure_ascii=True),
             "X-Charts-Rendered": str(charts_rendered),
             "X-Charts-Failed": str(charts_failed),
+            "X-Charts-Neutralized": str(neutralized_charts),
             "X-Min-Client-Version": MIN_CLIENT_VERSION,
             "Content-Disposition": f'attachment; filename="export.docx"',
         }
@@ -860,6 +908,9 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
         rendered_images.extend(rendered_images_to_base64(plantuml_result.images))
         md, image_map = preprocess_markdown(md, rendered_images)
 
+        # W2 安全网：所有渲染轮次后仍残留的图表围栏 = 失败/不支持 → 中性占位，杜绝图表源码漏进 DOCX。
+        md, neutralized_charts = _neutralize_unrendered_chart_blocks(md)
+
         await asyncio.to_thread(
             generate_docx_from_content,
             md,
@@ -888,6 +939,10 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
             + font_warnings
             + plantuml_result.warnings
         )
+        if neutralized_charts > 0:
+            warnings.append(
+                f"{neutralized_charts} 个图表未能渲染，已用占位符替代（图表源码不会进入文档）"
+            )
         warnings = _dedupe_warnings(warnings)
 
         failed_blocks = _model_or_dict(render_result.stats).get("failedBlocks", 0)
@@ -898,6 +953,7 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
             "X-Render-Warning-Count": str(len(render_result.warnings) + len(warnings)),
             "X-Convert-Warnings": json.dumps(warnings, ensure_ascii=True),
             "X-Render-Failed-Blocks": str(failed_blocks),
+            "X-Charts-Neutralized": str(neutralized_charts),
             "X-Charts-Rendered": str(charts_rendered),
             "X-Render-Summary-Base64": _render_summary_header(render_result.renderSummary),
             "X-Min-Client-Version": MIN_CLIENT_VERSION,
