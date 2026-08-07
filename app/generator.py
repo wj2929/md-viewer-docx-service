@@ -95,6 +95,7 @@ class Block:
     runs: List[TextRun] = field(default_factory=list)
     text: str = ""
     rows: List[List[str]] = field(default_factory=list)  # table rows
+    column_aligns: List[Optional[str]] = field(default_factory=list)  # 每列对齐: "left"/"center"/"right"/None
 
 
 @dataclass
@@ -113,6 +114,41 @@ _RE_CODE_FENCE = re.compile(r"^```")
 _RE_HR = re.compile(r"^(-{3,}|_{3,}|\*{3,})\s*$")
 _RE_TABLE_ROW = re.compile(r"^\|(.+)\|$")
 _RE_TABLE_SEP = re.compile(r"^\|[\s:|-]+\|$")
+
+
+_UNESCAPED_PIPE_RE = re.compile(r"(?<!\\)\|")
+
+
+def _split_table_cells(row_text: str) -> List[str]:
+    """按未转义的 | 分列（GFM：\\| 属单元格内容），并把 \\| 还原为 |。
+
+    旧实现裸 split("|") 会把正则单元格（如 `a\\|b\\|c`）炸成一列一字符的宽表。
+    """
+    parts = _UNESCAPED_PIPE_RE.split(row_text)
+    # 标准表格行首尾是 |，split 后首尾为空串
+    if parts and parts[0].strip() == "":
+        parts = parts[1:]
+    if parts and parts[-1].strip() == "":
+        parts = parts[:-1]
+    return [p.strip().replace("\\|", "|") for p in parts]
+
+
+def _parse_table_aligns(sep_row: str) -> List[Optional[str]]:
+    """从表格分隔行解析每列对齐：:---: 居中、---: 右、:--- 左、--- 默认(None)。"""
+    aligns: List[Optional[str]] = []
+    for cell in sep_row.strip("|").split("|"):
+        cell = cell.strip()
+        left = cell.startswith(":")
+        right = cell.endswith(":")
+        if left and right:
+            aligns.append("center")
+        elif right:
+            aligns.append("right")
+        elif left:
+            aligns.append("left")
+        else:
+            aligns.append(None)
+    return aligns
 _RE_CHART_PLACEHOLDER_PARAGRAPH = re.compile(
     r"^!\[[^\]\n]*\]\(\s*mdv__chart__[0-9a-f]{8}__(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)$"
 )
@@ -252,15 +288,17 @@ def parse_markdown(md_text: str, ref_id_to_index: Optional[Dict[str, int]] = Non
         # 表格
         if _RE_TABLE_ROW.match(line.strip()):
             rows = []
+            column_aligns: List[Optional[str]] = []
             while i < len(lines) and _RE_TABLE_ROW.match(lines[i].strip()):
                 row_text = lines[i].strip()
                 if _RE_TABLE_SEP.match(row_text):
+                    column_aligns = _parse_table_aligns(row_text)
                     i += 1
                     continue
-                cells = [c.strip() for c in row_text.strip("|").split("|")]
+                cells = _split_table_cells(row_text)
                 rows.append(cells)
                 i += 1
-            blocks.append(Block(type=BlockType.TABLE, rows=rows))
+            blocks.append(Block(type=BlockType.TABLE, rows=rows, column_aligns=column_aligns))
             continue
 
         # 无序列表
@@ -664,6 +702,22 @@ def _adaptive_table_target_width_cm(rows: List[List[str]], content_width_cm: flo
     return min(content_width_cm, _preview_table_target_width_cm(rows))
 
 
+_TABLE_ALIGN_TO_WD = {
+    "left": WD_ALIGN_PARAGRAPH.LEFT,
+    "center": WD_ALIGN_PARAGRAPH.CENTER,
+    "right": WD_ALIGN_PARAGRAPH.RIGHT,
+}
+
+
+def _apply_column_align(paragraph, column_aligns: Optional[List[Optional[str]]], col: int) -> None:
+    """按 markdown 分隔行的 :---: 标记设置单元格段落对齐；无标记保持默认。"""
+    if not column_aligns or col >= len(column_aligns):
+        return
+    align = _TABLE_ALIGN_TO_WD.get(column_aligns[col] or "")
+    if align is not None:
+        paragraph.alignment = align
+
+
 def _add_table(
     doc,
     rows: List[List[str]],
@@ -674,6 +728,7 @@ def _add_table(
     east_asia_font_name: Optional[str] = None,
     mono_font: str = "Courier New",
     mono_east_asia_font: Optional[str] = None,
+    column_aligns: Optional[List[Optional[str]]] = None,
 ):
     """添加 Word 表格（单元格内支持 **加粗**、*斜体*、`代码`、引用角标）"""
     if not rows:
@@ -706,6 +761,7 @@ def _add_table(
                     cell.width = Cm(preview_cell_widths[j])
                 cell.text = ""
                 p = cell.paragraphs[0]
+                _apply_column_align(p, column_aligns, j)
                 if mode == "preview":
                     _set_cell_margins(cell)
                     p.paragraph_format.space_before = Pt(0)
@@ -743,6 +799,7 @@ def _add_styled_table(
     east_asia_font_name: Optional[str] = None,
     mono_font: str = "Courier New",
     mono_east_asia_font: Optional[str] = None,
+    column_aligns: Optional[List[Optional[str]]] = None,
 ):
     """添加非 preview 样式表格。preview 继续走 _add_table(mode="preview")。"""
     if not rows:
@@ -785,6 +842,7 @@ def _add_styled_table(
                 _set_cell_shading(cell, table_style.header_fill)
 
             paragraph = cell.paragraphs[0]
+            _apply_column_align(paragraph, column_aligns, j)
             paragraph.paragraph_format.space_before = Pt(0)
             paragraph.paragraph_format.space_after = Pt(0)
             paragraph.paragraph_format.line_spacing = table_style.line_spacing
@@ -1281,7 +1339,10 @@ def _render_blocks(
                 link_underline=link_underline,
             )
             _set_paragraph_spacing(para, before=list_spacing_before, after=list_spacing_after, line=list_line_spacing or line_spacing)
-            ordered_counters.clear()
+            # 只重置同层及更深层的有序编号：嵌套无序子列表不打断父级有序列表的连续编号
+            for level in list(ordered_counters):
+                if level >= block.level:
+                    del ordered_counters[level]
 
         elif block.type == BlockType.ORDERED_LIST:
             for level in list(ordered_counters):
@@ -1318,6 +1379,7 @@ def _render_blocks(
                     east_asia_font_name=east_asia_font_name,
                     mono_font=mono_font,
                     mono_east_asia_font=mono_east_asia_font,
+                    column_aligns=block.column_aligns,
                 )
                 _add_table_gap(doc, after=Pt(block_style.table.gap_after_pt))
                 continue
@@ -1333,6 +1395,7 @@ def _render_blocks(
                 east_asia_font_name=east_asia_font_name,
                 mono_font=mono_font,
                 mono_east_asia_font=mono_east_asia_font,
+                column_aligns=block.column_aligns,
             )
             if table_mode == "preview":
                 _add_preview_table_gap(doc)
@@ -1447,8 +1510,9 @@ def _render_blocks(
             else:
                 _set_paragraph_spacing(para, before=Pt(4), after=Pt(4))
 
-        # 重置有序列表计数器
-        if block.type != BlockType.ORDERED_LIST:
+        # 重置有序列表计数器（嵌套无序子列表不打断父级有序编号，
+        # 其同层/更深层的重置已在 UNORDERED_LIST 分支内处理）
+        if block.type not in (BlockType.ORDERED_LIST, BlockType.UNORDERED_LIST):
             ordered_counters.clear()
 
 

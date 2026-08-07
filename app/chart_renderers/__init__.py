@@ -29,6 +29,26 @@ CHART_LANG_ALIASES = {
 FENCE_RE = re.compile(r"^```([A-Za-z0-9_-]+)[^\n]*\n([\s\S]*?)^```\s*$", re.MULTILINE)
 BLOCK_MATH_RE = re.compile(r"\$\$\n?([\s\S]*?)\n?\$\$", re.MULTILINE)
 INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+)\$(?!\$)")
+# 任意语言（含无语言）的代码围栏——公式替换必须跳过围栏内部，
+# 否则 bash 的 ${VAR}...${VAR} 会被当成行内公式吃掉（真实文档实测踩雷）
+# 支持 ``` 与 ~~~ 两种围栏记号（backreference 保证开闭配对），3 个及以上重复
+ALL_FENCE_RE = re.compile(r"^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\s*$", re.MULTILINE)
+# 行内代码 `...` 与 ``...``（后者允许内容含单个反引号）同样保护其中的 $
+# （表格单元格里的正则 `...$).*$)` 实测被误吃并撕裂表格）
+INLINE_CODE_RE = re.compile(r"``[^\n]+?``|`[^`\n]+`")
+
+
+def _fence_spans(text: str) -> list[tuple[int, int]]:
+    spans = [(m.start(), m.end()) for m in ALL_FENCE_RE.finditer(text)]
+    fence_only = list(spans)
+    for m in INLINE_CODE_RE.finditer(text):
+        if not any(s <= m.start() < e for s, e in fence_only):
+            spans.append((m.start(), m.end()))
+    return spans
+
+
+def _inside_spans(index: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= index < end for start, end in spans)
 DOCX_IMAGE_MAX_PIXELS = 20_000_000
 DOCX_CHART_MAX_WIDTH_CM = 15.5
 DOCX_CHART_MAX_HEIGHT_CM = 24.0
@@ -80,7 +100,11 @@ def render_charts_and_formulas_sync(
 
     result.markdown = FENCE_RE.sub(replace_fence, result.markdown)
 
+    fence_spans = _fence_spans(result.markdown)
+
     def replace_block_math(match: re.Match[str]) -> str:
+        if _inside_spans(match.start(), fence_spans):
+            return match.group(0)  # 代码围栏内的 $$ 不是公式
         expr = match.group(1).strip()
         placeholder = _new_placeholder()
         try:
@@ -96,8 +120,11 @@ def render_charts_and_formulas_sync(
         return f"![]({placeholder})"
 
     result.markdown = BLOCK_MATH_RE.sub(replace_block_math, result.markdown)
+    fence_spans = _fence_spans(result.markdown)
 
     def replace_inline_math(match: re.Match[str]) -> str:
+        if _inside_spans(match.start(), fence_spans):
+            return match.group(0)  # 代码围栏内的 $...$（如 bash 变量）不是公式
         expr = match.group(1).strip()
         placeholder = _new_placeholder()
         try:

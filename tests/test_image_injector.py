@@ -177,7 +177,8 @@ class TestInjectImages:
         assert cell_para._element.xpath(".//w:drawing")
         assert cell_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
 
-    def test_inline_placeholder_image_uses_chart_paragraph_layout(self, tmp_path, small_png_base64):
+    def test_inline_placeholder_in_text_paragraph_keeps_paragraph_layout(self, tmp_path, small_png_base64):
+        """含正文的段落（如行内公式）注入图片后保持原排版，不套图表段落居中。"""
         placeholder_id = "mdv__chart__a0b1c2d3__"
         doc_path = str(tmp_path / "inline-image.docx")
         doc = Document()
@@ -196,10 +197,10 @@ class TestInjectImages:
         reopened = Document(doc_path)
         image_para = next(p for p in reopened.paragraphs if p._element.xpath(".//w:drawing"))
         assert placeholder_id not in image_para.text
-        assert image_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
-        assert round(image_para.paragraph_format.space_before.cm, 2) == 0.45
-        assert round(image_para.paragraph_format.space_after.cm, 2) == 0.45
-        assert image_para.paragraph_format.first_line_indent is None
+        assert "before" in image_para.text and "after" in image_para.text
+        # 保持原段落排版：不居中、不清除首行缩进
+        assert image_para.alignment != WD_ALIGN_PARAGRAPH.CENTER
+        assert image_para.paragraph_format.first_line_indent is not None
 
 
 class TestImageWidth:

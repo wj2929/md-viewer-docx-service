@@ -6,9 +6,11 @@ md-viewer-docx-service · FastAPI 入口
   模式 A（服务端渲染）：客户端传 markdown，服务端自己渲染图表 → 需要 full 镜像
 """
 import os
+import io
 import uuid
 import asyncio
 import logging
+import posixpath
 import tempfile
 import json
 import shutil
@@ -16,6 +18,8 @@ import base64
 import re
 from pathlib import Path
 from typing import Optional
+
+from PIL import Image as PILImage
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -27,6 +31,7 @@ from slowapi.errors import RateLimitExceeded
 from app.generator import generate_docx_from_content
 from app.presets import VALID_STYLES, DOCX_PRESETS, STYLE_ORDER, NON_PREVIEW_BLOCK_STYLES
 from app.image_injector import (
+    IMAGE_MAX_B64_LEN,
     preprocess_markdown,
     inject_images,
     ImageLayout,
@@ -45,9 +50,11 @@ from app.source_models import ConvertSourceRequest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 MIN_CLIENT_VERSION = "1.7.0"
 KATEX_WIDTH_CM_PER_CSS_PX = 0.018
+# 行内公式随文字排版，换算系数按正文字号标定（deviceScaleFactor≈3 的设备像素）
+KATEX_INLINE_WIDTH_CM_PER_PX = 0.009
 KATEX_MIN_WIDTH_CM = 2.8
 KATEX_MAX_WIDTH_CM = 10.5
 CHART_WIDTH_CM_PER_CSS_PX = 0.018
@@ -437,6 +444,8 @@ def _full_fidelity_images_to_base64(images) -> list[dict]:
             "type": image_type,
             "pngBase64": base64.b64encode(png_path.read_bytes()).decode("ascii"),
             "widthCm": width_cm,
+            "widthPx": _get_field(image, "widthPx", 0) or 0,
+            "heightPx": _get_field(image, "heightPx", 0) or 0,
         }
         source_index = _get_field(image, "sourceIndex")
         if source_index is not None:
@@ -585,7 +594,7 @@ def _collect_full_fidelity_source_locators(markdown: str) -> list[dict]:
     return locators
 
 
-def _replace_full_fidelity_chart_blocks(markdown: str, images: list[dict]) -> str:
+def _replace_full_fidelity_chart_blocks(markdown: str, images: list[dict], style: str = "standard") -> str:
     result = markdown
     locators_by_block_id = {
         locator["blockId"]: locator
@@ -646,6 +655,7 @@ def _replace_full_fidelity_chart_blocks(markdown: str, images: list[dict]) -> st
         elif image_type == "c4plantuml":
             result = _replace_nth_match(C4PLANTUML_BLOCK_PATTERN, result, placeholder, source_index)
 
+    unindexed_katex_images: list[dict] = []
     for image in images:
         if id(image) in block_id_images:
             continue
@@ -683,10 +693,143 @@ def _replace_full_fidelity_chart_blocks(markdown: str, images: list[dict]) -> st
             result, _ = WAVEDROM_BLOCK_PATTERN.subn(placeholder, result, count=1)
         elif image_type == "c4plantuml":
             result, _ = C4PLANTUML_BLOCK_PATTERN.subn(placeholder, result, count=1)
+        elif image_type == "katex":
+            unindexed_katex_images.append(image)
+    result = _replace_katex_images_by_position(result, unindexed_katex_images, style)
+    return result
+
+
+LOCAL_IMAGE_REF_PATTERN = re.compile(
+    r"!\[[^\]\n]*\]\(\s*(?:<(?P<angle>[^>\n]+)>|(?P<plain>[^)\s]+))(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
+)
+RASTER_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+CHART_FILE_REF_EXTENSIONS = {".excalidraw", ".bpmn"}
+LOCAL_IMAGE_MAX_B64_LEN = IMAGE_MAX_B64_LEN  # 单一权威：app.image_injector
+# 与 chart_renderers 同规则：```/~~~ 围栏（backreference 配对）+ `...`/``...`` 行内代码
+_FENCED_CODE_SPAN_RE = re.compile(r"^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\s*$", re.MULTILINE)
+_INLINE_CODE_SPAN_RE = re.compile(r"``[^\n]+?``|`[^`\n]+`")
+
+
+def _embed_local_image_refs(
+    md: str,
+    resources: list[dict],
+    entry_path: Optional[str] = None,
+) -> tuple[str, list[dict], list[str]]:
+    """把普通本地图片引用解析为占位符 + 图片数据（来自 bundle 资源）。
+
+    v0.2.2 前普通 `![alt](local.png)` 会被 generator 当作文本渲染成 "!"+链接，
+    图片静默丢失且零 warning。现在：能从 bundle 资源解析的嵌入文档；
+    解析不到的保留原文并产生 warning（不再静默）。
+    """
+    resource_map = {item.get("path"): item for item in (resources or [])}
+    entry_dir = posixpath.dirname(entry_path) if entry_path else ""
+    fenced_spans = [(m.start(), m.end()) for m in _FENCED_CODE_SPAN_RE.finditer(md)]
+    images: list[dict] = []
+    warnings: list[str] = []
+    replacements: list[dict] = []
+
+    for m in LOCAL_IMAGE_REF_PATTERN.finditer(md):
+        if any(s <= m.start() < e for s, e in fenced_spans):
+            continue  # 代码块里展示用的图片语法不动
+        ref = (m.group("angle") or m.group("plain") or "").strip()
+        if not ref or ref.startswith(("http://", "https://", "data:", "//")) or "mdv__chart__" in ref:
+            continue
+        clean = ref.split("#", 1)[0].split("?", 1)[0]
+        ext = posixpath.splitext(clean.lower())[1]
+        if ext in CHART_FILE_REF_EXTENSIONS:
+            continue  # .excalidraw/.bpmn 走全保真图表渲染管线
+        if ext not in RASTER_IMAGE_EXTENSIONS:
+            warnings.append(f"本地图片未嵌入（暂不支持 {ext or '无扩展名'} 格式）：{ref}")
+            continue
+        try:
+            resolved = normalize_bundle_path(posixpath.join(entry_dir, clean) if entry_dir else clean)
+        except ValueError:
+            warnings.append(f"本地图片未嵌入（路径越界或不安全）：{ref}")
+            continue
+        resource = resource_map.get(resolved)
+        if not resource or resource.get("kind") != "binary" or not resource.get("base64"):
+            warnings.append(f"本地图片未嵌入（未随请求提供该资源）：{ref}")
+            continue
+        b64 = resource["base64"]
+        if len(b64) > LOCAL_IMAGE_MAX_B64_LEN:
+            warnings.append(f"本地图片未嵌入（超过大小上限）：{ref}")
+            continue
+        try:
+            with PILImage.open(io.BytesIO(base64.b64decode(b64))) as img:
+                width_px, height_px = img.size
+        except Exception:
+            warnings.append(f"本地图片未嵌入（图片数据无法解析）：{ref}")
+            continue
+        placeholder_id = f"mdv__chart__{uuid.uuid4().hex[:8]}__"
+        images.append({
+            "id": placeholder_id,
+            "type": "local-image",
+            "pngBase64": b64,
+            "widthCm": round(min(width_px * 2.54 / 96, 15.5), 2),
+            "widthPx": width_px,
+            "heightPx": height_px,
+            # 普通配图保持原始尺寸感，不套图表的"放大到版心宽"规则（小图放大会糊）
+            "noEnlarge": True,
+        })
+        replacements.append({"start": m.start(), "end": m.end(), "value": f"![]({placeholder_id})"})
+
+    for rep in sorted(replacements, key=lambda item: item["start"], reverse=True):
+        md = f"{md[:rep['start']]}{rep['value']}{md[rep['end']:]}"
+    return md, images, warnings
+
+
+def _math_slots_in_document_order(text: str) -> list[dict]:
+    """按文档顺序枚举公式槽位：$$块级$$ 与 $行内$（行内不落在块级范围内）。
+
+    代码围栏与行内代码 `...` 内的 $ 不是公式（bash 变量、正则等），必须排除，
+    否则真公式的图片会被配对到代码里的假槽位上。
+    """
+    fence_spans = [(m.start(), m.end()) for m in _FENCED_CODE_SPAN_RE.finditer(text)]
+    for m in _INLINE_CODE_SPAN_RE.finditer(text):
+        if not any(s <= m.start() < e for s, e in fence_spans):
+            fence_spans.append((m.start(), m.end()))
+    in_fence = lambda i: any(s <= i < e for s, e in fence_spans)  # noqa: E731
+    slots = []
+    block_spans = []
+    for m in KATEX_BLOCK_PATTERN.finditer(text):
+        if in_fence(m.start()):
+            continue
+        block_spans.append((m.start(), m.end()))
+        slots.append({"kind": "block", "start": m.start(), "end": m.end()})
+    for m in KATEX_INLINE_PATTERN.finditer(text):
+        if in_fence(m.start()):
+            continue
+        if any(s <= m.start() < e for s, e in block_spans):
+            continue
+        slots.append({"kind": "inline", "start": m.start(), "end": m.end()})
+    slots.sort(key=lambda s: s["start"])
+    return slots
+
+
+def _replace_katex_images_by_position(result: str, katex_images: list[dict], style: str = "standard") -> str:
+    """公式图片按文档位置顺序配对槽位，行内公式保持段内（不另起段落）。
+
+    旧实现对每张图"先抢块级槽、抢不到才用行内槽"，行内公式先渲染完成时会
+    占走块级位置，导致行内/块级公式图片对调（v0.2.2 已知 bug）。
+    """
+    if not katex_images:
+        return result
+    slots = _math_slots_in_document_order(result)
+    pairs = list(zip(slots, katex_images))
+    # 从后往前替换，保持前面槽位的偏移量稳定
+    for slot, image in reversed(pairs):
+        placeholder = f"![]({image['id']})"
+        if slot["kind"] == "inline":
+            image["inline"] = True
+            width_px = image.get("widthPx", 0) or 0
+            if width_px > 0:
+                # 行内公式随正文字号缩放（系数以 12pt 正文标定），不套块级公式的最小宽度钳制
+                body_pt = DOCX_PRESETS.get(style, {}).get("body_size", 11)
+                factor = KATEX_INLINE_WIDTH_CM_PER_PX * body_pt / 12.0
+                image["widthCm"] = min(KATEX_MAX_WIDTH_CM, round(width_px * factor, 2))
+            result = f"{result[:slot['start']]}{placeholder}{result[slot['end']:]}"
         else:
-            result, replaced = KATEX_BLOCK_PATTERN.subn(placeholder, result, count=1)
-            if replaced == 0:
-                result, _ = KATEX_INLINE_PATTERN.subn(f"\n\n{placeholder}\n\n", result, count=1)
+            result = f"{result[:slot['start']]}\n\n{placeholder}\n\n{result[slot['end']:]}"
     return result
 
 
@@ -901,7 +1044,12 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
         tmp_path = os.path.join(tmp_dir, f"output-{uuid.uuid4().hex[:8]}.docx")
 
         rendered_images = _full_fidelity_images_to_base64(render_result.images)
-        md = _replace_full_fidelity_chart_blocks(source_markdown, rendered_images)
+        md = _replace_full_fidelity_chart_blocks(source_markdown, rendered_images, req.style)
+
+        md, local_image_dicts, local_image_warnings = _embed_local_image_refs(
+            md, source_resources, markdown_file_path
+        )
+        rendered_images.extend(local_image_dicts)
 
         plantuml_result = await asyncio.to_thread(render_charts_and_formulas_sync, md, ["plantuml"])
         md = plantuml_result.markdown
@@ -938,6 +1086,7 @@ async def convert_source(req: ConvertSourceRequest, request: Request):
             + reference_warnings
             + font_warnings
             + plantuml_result.warnings
+            + local_image_warnings
         )
         if neutralized_charts > 0:
             warnings.append(

@@ -6,12 +6,14 @@
 """
 import re
 import base64
+import copy
 import io
 import logging
 from dataclasses import dataclass
 from typing import Dict, Optional
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 from docx.shared import Cm
 from PIL import Image
 
@@ -39,10 +41,19 @@ class ImageLayout:
 
 
 class ImageData:
-    __slots__ = ("id", "png_bytes", "width_cm", "pixel_width", "pixel_height")
+    __slots__ = ("id", "png_bytes", "width_cm", "pixel_width", "pixel_height", "inline", "no_enlarge")
 
-    def __init__(self, id: str, png_base64: str, width_cm: float = 15.5):
+    def __init__(
+        self,
+        id: str,
+        png_base64: str,
+        width_cm: float = 15.5,
+        inline: bool = False,
+        no_enlarge: bool = False,
+    ):
         self.id = id
+        self.inline = inline
+        self.no_enlarge = no_enlarge
         if len(png_base64) > IMAGE_MAX_B64_LEN:
             raise ValueError(f"Image {id}: base64 exceeds {IMAGE_MAX_B64_LEN} chars")
         self.png_bytes = base64.b64decode(png_base64)
@@ -77,6 +88,7 @@ def resolve_image_width_cm(
     style: str = "standard",
     layout: Optional[ImageLayout] = None,
     image_size: Optional[tuple[int, int]] = None,
+    allow_enlarge: bool = True,
 ) -> float:
     """根据导出样式解析图片插入宽度。"""
     if layout is not None:
@@ -92,7 +104,8 @@ def resolve_image_width_cm(
                     and 0.25 <= ratio <= 1.25
                 )
         should_enlarge = (
-            layout.min_width_cm
+            allow_enlarge
+            and layout.min_width_cm
             and width_cm >= layout.min_width_source_threshold_cm
             and resolved < layout.min_width_cm
             and (style != "preview" or is_readable_landscape)
@@ -133,7 +146,10 @@ def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, Ima
     将带 alt 的图表占位符规范化为 ![](id)，避免 Markdown 行内解析把它当成普通链接。
     返回 (原始 md, {id: ImageData})
     """
-    md = PLACEHOLDER_IMAGE_MARKDOWN_PATTERN.sub(lambda m: f"\n\n![]({m.group(1)})\n\n", md)
+    inline_ids = {img.get("id") for img in images if img.get("inline")}
+    md = PLACEHOLDER_IMAGE_MARKDOWN_PATTERN.sub(
+        lambda m: m.group(0) if m.group(1) in inline_ids else f"\n\n![]({m.group(1)})\n\n", md
+    )
     md = re.sub(r"\n{3,}", "\n\n", md).strip()
     image_map: Dict[str, ImageData] = {}
     for img in images:
@@ -142,6 +158,8 @@ def preprocess_markdown(md: str, images: list[dict]) -> tuple[str, Dict[str, Ima
                 id=img["id"],
                 png_base64=img["pngBase64"],
                 width_cm=img.get("widthCm", 15.5),
+                inline=bool(img.get("inline")),
+                no_enlarge=bool(img.get("noEnlarge")),
             )
             image_map[data.id] = data
         except Exception as e:
@@ -176,19 +194,32 @@ def inject_images(
             if not inline_matches:
                 continue
 
+            # 快照第一个 run 的字符属性，重建文字 run 时继承，避免正文字体丢失
+            source_rpr = None
+            if para.runs:
+                first_rpr = para.runs[0]._element.find(qn("w:rPr"))
+                if first_rpr is not None:
+                    source_rpr = copy.deepcopy(first_rpr)
+
             for run in para.runs:
                 run.clear()
+
+            def _add_text_run(content: str):
+                new_run = para.add_run(content)
+                if source_rpr is not None:
+                    new_run._element.insert(0, copy.deepcopy(source_rpr))
+                return new_run
 
             cursor = 0
             inserted_any = False
             for match in inline_matches:
                 if match.start() > cursor:
-                    para.add_run(original_text[cursor:match.start()])
+                    _add_text_run(original_text[cursor:match.start()])
 
                 placeholder_id = match.group(1)
                 img_data = image_map.get(placeholder_id)
                 if img_data is None:
-                    para.add_run(match.group(0))
+                    _add_text_run(match.group(0))
                 else:
                     run = para.add_run()
                     run.add_picture(
@@ -198,6 +229,7 @@ def inject_images(
                             style,
                             layout,
                             (img_data.pixel_width, img_data.pixel_height),
+                            allow_enlarge=not img_data.no_enlarge,
                         )),
                     )
                     injected += 1
@@ -206,9 +238,12 @@ def inject_images(
                 cursor = match.end()
 
             if cursor < len(original_text):
-                para.add_run(original_text[cursor:])
+                _add_text_run(original_text[cursor:])
 
-            if inserted_any:
+            # 只有"纯占位符段落"才套图片段落排版（居中等）；
+            # 含正文的段落（行内公式）保持原有对齐/缩进/行距
+            placeholder_only = not PLACEHOLDER_IMAGE_MARKDOWN_PATTERN.sub("", original_text).strip()
+            if inserted_any and placeholder_only:
                 _apply_image_paragraph_layout(para, style, layout)
             continue
 
@@ -230,6 +265,7 @@ def inject_images(
                 style,
                 layout,
                 (img_data.pixel_width, img_data.pixel_height),
+                allow_enlarge=not img_data.no_enlarge,
             )),
         )
         injected += 1
